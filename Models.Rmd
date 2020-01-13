@@ -1,0 +1,70 @@
+---
+title: "Models"
+author: "Christian Endter"
+date: "12/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(MASS)
+library(gbm)
+# library(pscl)
+# library(ResourceSelection)
+
+
+```
+
+# Count Models
+
+```{r Initial Analysis}
+
+# Number of strikes per week (note this is different from the ave strikes per week aggregated by days)
+
+master <- readRDS("KDEN complete.RDS")
+mw <- master %>% 
+  dplyr::filter(DATE > "1994-08-01") %>% 
+  mutate(WEEK = isoweek(DATE)) %>% 
+  group_by(YEAR=year(DATE), WEEK) %>% 
+  summarise(x=sum(STRIKE)) %>% 
+  group_by(WEEK) %>% 
+  summarise(NWEEKS=n(),STRIKES=sum(x), RATIO=STRIKES/NWEEKS)
+
+
+# Map back to master file
+master <- master %>% mutate(WEEK = isoweek(DATE))
+mw <- dplyr::select(mw, WEEK, RATIO)
+master <- left_join(master,mw, by=c("WEEK"="WEEK"))
+
+x <- master %>% group_by(WEEK) %>% summarise(RATIO = mean(RATIO))
+mean(x$RATIO)
+sd(x$RATIO)
+
+
+master <- master %>% group_by(DATE, RTIME) %>% summarise
+m <- lm(RATIO ~ TEMP + as.factor(week(DATE)), data=master)
+
+# 53 weeks? Seems part of ISO standard because Jan 1st not always a Monday
+mw <- master %>% group_by(DATE, WEEK = week(DATE)) 
+
+## Calculate the probability of a strike ... WE SEEM TO LOSE SOME ROWS IN THIS AGGREGATION - SAME RUNWAY STRIKES?
+# NOTE, CAN'T USE n() as it counts records and thus includes days with no strikes (=NA)
+masterl <- master %>% 
+  group_by(`AIRPORT ID`, DATE,TD, RUNWAY) %>%
+  summarise(STRIKES = sum(STRIKE), TOTAL = sum(TOTAL), ARRIVALS = sum(ARRIVALS), DEPARTURES = sum(DEPARTURES),
+            STRIKEP = STRIKES/TOTAL)
+```
+
+```{r Graphs}
+x <- master %>% group_by(WEEK) %>% summarise(RATIO = mean(RATIO))
+ggplot(x, aes(x=WEEK,y=RATIO, group=WEEK)) + geom_boxplot()
+
+master <- master %>% mutate(WEEK = week(DATE))
+
+m <- gbm(STRIKE ~ WEEK + TOTAL,data=master)
+
+```
+
