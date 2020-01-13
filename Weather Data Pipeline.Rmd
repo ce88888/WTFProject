@@ -16,6 +16,10 @@ library(lubridate)
 
 ### This file contains functions for downloading and processing weather data from NOAA
 ### 
+### Workflow (if no local files)
+### (1) call downloadWeatherFile("KDEN","72565003017", 1994:2019)
+### (2) call loadAndCombine("KDEN")
+### (3) filter out what is not needed and average values (see chunk "Writing the weather data file")
 
 ### downloadAndProcessWeather(lookup, years)
 ### - fully automatic downloading and processing for several airports and years
