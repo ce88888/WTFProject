@@ -1,0 +1,114 @@
+---
+title: "Model Data Preparation"
+author: "Christian Endter"
+date: "14/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(padr)
+
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+## Purpose  
+
+The code in this file reads in the FAA, Weather, and Flight information prepared and cleaned separately and prepares a master file containing one row per flight in each time bucket and an indicator for weather the flight got struck or not. Note that the input files should not be date constrained, and the master file should equally contain all dates, to be filtered for each model in subsequent steps, as may be appropriate.  
+
+For example, for hour 19 on 2008-07-20, there were 128 total flights for KDEN, of which three encountered a bird. Thus the file will contain three lines with STRIKE = 1 for this hour and day, and 125 lines with STRIKE = 0. The other variables pertaining to this hour on this day (e.g. weather) are replicated. (c.f. `dplyr::filter(data_here, DATE == "2008-07-20" & RTIME == 10)` )
+
+## To Do
+* For those rows with strikes, the ATOTAL column (=FLTS NOT HIT) is NA, but should really have the correct number, so need to look into how to populate that elegantly
+
+```{r Loading the input files, filtering}
+### Note - assumes these have been cleaned already and and contain a DATE and RTIME field
+data_w <- readRDS("KDEN Weather.RDS")
+data_f <- readRDS("KDEN Flights.RDS")
+data_b <- readRDS("KDEN Birdcounts.RDS")
+data_faa <- readRDS("KDEN FAA.RDS")
+
+
+### Removal of extra columns
+### Edit here to retain or remove variables
+data_faa <- data_faa %>% 
+  dplyr::select(-c(RUNWAY,PRECIP,SKY, TIME, LIGHT))
+
+```
+
+```{r Master file}
+
+### Step 1: For those days+RTIMEs with strikes, aggregate to get the count in that day+RT buckket
+data_faa_grouped <- data_faa %>% 
+  dplyr::filter(!is.na(RTIME)) %>% 
+  group_by(DATE,RTIME) %>%
+  summarise(STRIKES = sum(STRIKE))
+
+# N.B.: There are several cells with multiple strikes, uncomment to see
+# table(d$STRIKES)
+# which(d$STRIKES==3)
+
+### Step 2: Join the faa data to the strikes data, which results in table with both the TOTAL flights 
+### and the number of STRIKES where there were any, then calculate a new variable ATOTAL to represent number
+### of flights not hit (need to set NA to 0 to enable correct subtraction)
+###
+### Future: Prepare table with only arriving or departing flights by subsetting on indicator (tbd) in FAA file
+df <- left_join(data_f,data_faa_grouped, by=c("DATE" = "DATE", "RTIME" = "RTIME")) %>%
+  dplyr::select(-c(ARRIVALS, DEPARTURES)) %>%
+  mutate(STRIKES = replace_na(STRIKES,0)) %>% 
+  mutate(ATOTAL = TOTAL-STRIKES)
+
+### Step 3: Create an empty tibble with all possible days and hours in the data set
+empty <- tibble(DATE = seq(ymd("1992-01-01"),ymd("2019-12-31"), by= "days")) %>%
+  pad("hour") %>% 
+  mutate(RTIME = hour(DATE),`AIRPORT ID` = as.factor("KDEN")) %>%
+  dplyr::select(DATE,RTIME, `AIRPORT ID`) %>%
+  mutate(DATE = ymd(substr(as.character(DATE),1,11))) 
+
+### Step 4: Map in the flight and strike
+m <- left_join(empty, df, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME")) %>%
+  dplyr::select(`AIRPORT ID`, `DATE`, `RTIME`,STRIKES,ATOTAL)
+
+rm(empty, df, data_faa_grouped)
+
+### Step 5: Expand the dataset by the number of rows for the day+RT combination which were not hit; the resulting
+### table now has the correct number of rows for flights not hit for the day+RT
+m <- mutate(m, ATOTAL = replace_na(ATOTAL,0)) 
+m <- uncount(m,m$ATOTAL)
+
+### Step 6: Add the table of flights which got hit (data_faa but not grouped by hour)
+### Replace the NAs created by the join (all the flights not hit) with zero
+data_faa_filtered <- data_faa %>% filter(!is.na(RTIME)) 
+m <- bind_rows(m,data_faa_filtered) %>% arrange(DATE) %>% mutate(STRIKE = replace_na(STRIKE,0))
+
+### Step 7: Add the weather data
+m <- left_join(m, data_w, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME") )
+
+### Step 8: Add the birdcount data from e-birds
+### Note removal of RTIME as only by day (assumes future will have bird numbers at all times)
+m <- left_join(m,select(data_b,-RTIME) ,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE"))
+
+
+### Step 9: Clean up column labels for clarity
+m <- m %>%
+  rename(`FLTS HIT` = STRIKES, `FLTS NOT HIT` = ATOTAL,
+         BIRDCOUNT = COUNT)
+
+### Save the file
+saveRDS(m,"KDEN model data all flights.RDS")
+
+
+### Cleanup
+rm(data_b, data_f, data_faa, data_faa_filtered, data_w, m)
+
+### VERIFICATION
+# # Check - was 128 total flights, now will be 125 and 3 strikes to be added
+# dplyr::filter(m, DATE=="2008-07-20" & RTIME ==10)
+# # Check - was 45 flights, now 44 non-struck, 1 with strike to be added
+# dplyr::filter(n, DATE=="1998-05-08" & RTIME ==19)
+```
+

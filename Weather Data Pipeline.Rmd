@@ -137,7 +137,8 @@ loadAndCombine <- function(airport, folder = "/weather/"){
     mutate(`WIND SPEED` = as.numeric(`WIND SPEED`) %>% na_if(9999)) %>%
     mutate(TEMP = as.numeric(TEMP) %>% na_if(9999)) %>%
     mutate(COVER = as.numeric(COVER) %>% na_if(9)) %>%
-    mutate(`REPORT TYPE` = as.factor(`REPORT TYPE`))
+    mutate(`REPORT TYPE` = as.factor(`REPORT TYPE`)) %>%
+    mutate(`AIRPORT ID` = as.factor(`AIRPORT ID`))
   
 
   return(data_w)

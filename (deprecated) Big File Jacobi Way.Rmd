@@ -1,0 +1,107 @@
+---
+title: "Big File Creation (the Jacobi way) for Krishna"
+author: "Christian Endter"
+date: "12/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(padr)
+
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+
+# Import flights, weather, birdcount data
+```{r Weather Data Import}
+# Weather data post initial processing saved in RDS file with name "ICAO Weather.RDS"
+data_weather <- readRDS("KDEN Weather.RDS")
+
+```
+# Import bird counts
+```{r Bird Count Data Import}
+
+```
+
+
+
+```{r}
+# The FAA data
+data <- readRDS("KDEN FAA.RDS")
+
+# modify the FAA data - take out non-essentials for smaller file
+# aggregate to day and hour
+d <- data %>% 
+  dplyr::filter(!is.na(RTIME)) %>% 
+  dplyr::select(-c(RUNWAY,PRECIP,SKY, TIME, LIGHT)) %>%
+  group_by(DATE,RTIME) %>%
+  summarise(STRIKES = sum(STRIKE))
+
+# # there are several days/hours with more than one strike
+# table(d$STRIKES)
+# which(d$STRIKES==3)
+
+# calculate flight numbers (non strikes) to replicate
+# N.B.: Future -> use arrival/departure indicator to adjust those totals
+# Note need to explicitly set NA to zero as otherwise subtraction screws up
+df <- left_join(data_flights,d) %>%
+  mutate(STRIKES = replace_na(STRIKES,0)) %>% 
+  mutate(ATOTAL = TOTAL-STRIKES)
+
+# # Check - was 128 total flights, now will be 125 and 3 strikes to be added
+# dplyr::filter(df, DATE=="2008-07-20" & RTIME ==10)
+# # Check - was 45 flights, now 44 non-struck, 1 with strike to be added
+# dplyr::filter(df, DATE=="1998-05-08" & RTIME ==19)
+
+
+# start with empty tibble with all possible days and hours
+empty <- tibble(DATE = seq(ymd("1992-01-01"),ymd("2019-01-01"), by= "days")) %>%
+  pad("hour") %>% 
+  mutate(RTIME = hour(DATE),`AIRPORT ID` = "KDEN") %>%
+  dplyr::select(DATE,RTIME, `AIRPORT ID`) %>%
+  mutate(DATE = ymd(substr(as.character(DATE),1,11))) 
+
+# map in the flights
+m <- left_join(empty, df, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME"))
+rm(empty, df)
+
+# expand the file by number of total flights (could also do arrivals/departures separately)
+# note, need to split into those days where we have flight info and where we don't ... of course there should be no strikes on those days without flight info but I'm too tired to deal with those errors/filter data down to only those days with flight info and strike
+m <- mutate(m, ATOTAL = replace_na(ATOTAL,0))
+m <- uncount(m,m$ATOTAL)
+
+
+# # Check - was 128 total flights, now will be 125 and 3 strikes to be added
+# dplyr::filter(m, DATE=="2008-07-20" & RTIME ==10)
+# # Check - was 45 flights, now 44 non-struck, 1 with strike to be added
+# dplyr::filter(m, DATE=="1998-05-08" & RTIME ==19)
+
+n <- m
+rm(m)
+
+# go back to source data to keep individual lines for each strike (i.e. not aggregated by hour)
+d <- data %>% 
+  dplyr::filter(!is.na(RTIME)) %>% 
+  dplyr::select(-c(RUNWAY,PRECIP,SKY, TIME, LIGHT))
+
+# add the FAA data (can just add together as the master has all the empties)
+n <- bind_rows(n,d) %>% arrange(DATE) %>% mutate(STRIKE = replace_na(STRIKE,0))
+
+# map in the weather data
+n <- left_join(n, data_weather, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME") )
+
+# leaving out birdcounts as not by the hour 
+
+# Check - was 128 total flights, now will be 125 and 3 strikes to be added
+dplyr::filter(n, DATE=="2008-07-20" & RTIME ==10)
+# Check - was 45 flights, now 44 non-struck, 1 with strike to be added
+dplyr::filter(n, DATE=="1998-05-08" & RTIME ==19)
+
+saveRDS(n, "BIG file the other way.RDS")
+
+```
+
