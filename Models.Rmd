@@ -8,15 +8,43 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-library(tidyverse)
-library(ggplot2)
+
 library(MASS)
 library(gbm)
-# library(pscl)
+library(tidyverse)
+library(ggplot2)
+library(pscl)
 # library(ResourceSelection)
 
 
 ```
+
+
+```{r Count models}
+d <- readRDS("KDEN model data all flights.RDS")
+
+### DON'T RUN ANY OF THIS ...  takes too long and has issues
+
+m <- glm.nb(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + TEMP, data = d, control = list(maxit = 25, epsilon=0.000001, trace=FALSE))
+
+
+d_byday <- d %>% dplyr::filter(year(DATE) %in% 2000:2018) %>%
+  group_by(`AIRPORT ID`, DATE) %>% 
+  summarise(RTIME=mean(RTIME),STRIKES = sum(STRIKE, na.rm=T), `FLTS TOTAL`=sum(`FLTS TOTAL`, na.rm=T), 
+            TEMP = mean(TEMP,na.rm=TRUE),`WIND SPEED`=mean(`WIND SPEED`,na.rm=TRUE))
+
+m <- glm.nb(STRIKES ~ `FLTS TOTAL` + TEMP + as.factor(week(DATE)), data = dbyday)
+mh <- hurdle(STRIKE ~ `FLTS TOTAL` + TEMP + as.factor(week(DATE)), data = dplyr::filter(d,year(DATE) %in% 2000:2010))
+
+model <- glm(Survived ~.,family=binomial(link='logit'),data=train)
+```
+
+
+```{r Classifier - Forest GBM}
+
+```
+
+
 
 # Count Models
 
