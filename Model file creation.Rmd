@@ -71,7 +71,7 @@ empty <- tibble(DATE = seq(ymd("1992-01-01"),ymd("2019-12-31"), by= "days")) %>%
 
 ### Step 4: Map in the flight and strike
 m <- left_join(empty, df, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME")) %>%
-  dplyr::select(`AIRPORT ID`, `DATE`, `RTIME`,STRIKES,ATOTAL)
+  dplyr::select(`AIRPORT ID`, `DATE`, `RTIME`,STRIKES,TOTAL,ATOTAL)
 
 rm(empty, df, data_faa_grouped)
 
@@ -90,12 +90,12 @@ m <- left_join(m, data_w, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME
 
 ### Step 8: Add the birdcount data from e-birds
 ### Note removal of RTIME as only by day (assumes future will have bird numbers at all times)
-m <- left_join(m,select(data_b,-RTIME) ,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE"))
+m <- left_join(m,dplyr::select(data_b,-RTIME) ,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE"))
 
 
 ### Step 9: Clean up column labels for clarity
 m <- m %>%
-  rename(`FLTS HIT` = STRIKES, `FLTS NOT HIT` = ATOTAL,
+  rename(`FLTS TOTAL` = TOTAL, `FLTS HIT` = STRIKES, `FLTS NOT HIT` = ATOTAL,
          BIRDCOUNT = COUNT)
 
 ### Save the file
