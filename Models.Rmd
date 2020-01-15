@@ -12,23 +12,155 @@ knitr::opts_chunk$set(echo = TRUE)
 library(MASS)
 library(gbm)
 library(tidyverse)
+library(lubridate)
 library(ggplot2)
 library(pscl)
+library(lme4)
+library(glmmTMB)
 # library(ResourceSelection)
 
 
 ```
 
 
-```{r Count models}
-d <- readRDS("KDEN model data all flights.RDS")
+```{r Data set preparation}
+data <- readRDS("KDEN model data all flights.RDS")
+
+
+### Set 1: Base data (adjust time filter as needed)
+### - every line corresponds to a single flight with STRIKE = 1/0
+d <- data %>% dplyr::filter(year(DATE) %in% 2014:2018) %>%
+    mutate(WEEK = as.factor(isoweek(DATE)), 
+           MONTH = as.factor(month(DATE)))
+  
+### Set 2: Data aggregated by hour
+### - every line corresponds to a particular hour on a date with STRIKES = num strikes, and STRIKE = 1/0
+d_day_hour <- d %>%
+  group_by(`AIRPORT ID`,DATE,RTIME) %>%
+  summarise(`FLTS TOTAL` = first(`FLTS TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T)) %>%
+    mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+# d_day_hour$WEEK <- as.factor(d_day_hour$WEEK)
+# d_day_hour$MONTH<- as.factor(d_day_hour$MONTH)
+
+### Set 3: Data aggregated by day
+### - every line correspondes to a particular date with STRIKES = num strikes, and STRIKE = 1/0 
+d_day <- d_day_hour %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`FLTS TOTAL` = sum(`FLTS TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T)) %>%
+    mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+### Quick - look
+### Heavily unbalanced base set
+table(df$STRIKE)
+
+### Heavily zeroinflated counts
+table(d_day_hour$STRIKES)
+table(d_day$STRIKES)
+```
+
+
+```{r Logistic regression - DAY/HOUR}
+
+m_day_hour_notime <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS, data = d_day_hour,family=binomial(link='logit'))
+summary(m_day_hour_notime)
+
+m_day_hour_wfactor <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS + WEEK, data = d_day_hour,family=binomial(link='logit'))
+summary(m_day_hour_wfactor)
+
+m_day_hour_mfactor <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS + MONTH, data = d_day_hour,family=binomial(link='logit'))
+summary(m_day_hour_mfactor)
+
+### too much noise in hourly information?
+```
+
+```{r Logistic regression - DAY}
+
+m_day_notime <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS, data = d_day,family=binomial(link='logit'))
+summary(m_day_notime)
+
+m_day_wfactor <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS + WEEK, data = d_day,family=binomial(link='logit'))
+summary(m_day_wfactor)
+
+m_day_mfactor <- glm(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + SLP + BIRDCOUNT + 
+                       CLOUDH + COVERH + VIS + MONTH, data = d_day,family=binomial(link='logit'))
+summary(m_day_mfactor)
+
+```
+
+```{r Count Models - DAY}
+
+m_count_day_notime <- hurdle(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS, 
+                               data = d_day, dist="negbin")
+summary(m_count_day_notime)
+
+m_count_day_wfactor <- glmmTMB(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + (1|WEEK),
+                               data = d_day)
+
+
+m_count_day_wfactor <- glm(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + WEEK, family= "poisson",
+                               data = d_day)
+summary(m_count_day_wfactor)
+        
+        
+m_count_day_mfactor <- glm(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + MONTH, 
+                               data = d_day, family="poisson")
+summary(m_count_day_mfactor)
+
+```
+
+
+dx <- d %>% dplyr::filter(DATE == "2014-01-01") 
+
+%>% group_by(`AIRPORT ID`, DATE) %>% 
+  summarise(RTIME=mean(RTIME),STRIKES = sum(STRIKE, na.rm=T), `FLTS TOTAL`=sum(`FLTS TOTAL`, na.rm=T), 
+            TEMP = mean(TEMP,na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            BIRDS = sum(BIRDCOUNT), CLOUDH = mean(CLOUDH, na.rm=T))
+
+day_strike_binary <- d %>% dplyr::filter(year(DATE) %in% 2014:2019) %>%
+  group_by(`AIRPORT ID`, DATE) %>% 
+  summarise(RTIME=mean(RTIME),STRIKES = sum(STRIKE, na.rm=T), `FLTS TOTAL`=mean(`FLTS TOTAL`, na.rm=T), 
+            TEMP = mean(TEMP,na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            BIRDS = sum(BIRDCOUNT), CLOUDH = mean(CLOUDH, na.rm=T))
+  
+day_strike_binary <- day_strike_binary %>% mutate(YN = if_else(STRIKES>0,1,0))
+
+m <- glm(YN ~ `FLTS TOTAL` + `WIND SPEED` + TEMP + `WIND ANGLE` + BIRDS + CLOUDH + as.factor(week(DATE)),
+         data = day_strike_binary,family=binomial(link='logit'))
+mzi <- zeroinfl(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + TEMP + `WIND ANGLE` + BIRDS + CLOUDH + as.factor(week(DATE)),
+         data = day_strike_binary)
 
 ### DON'T RUN ANY OF THIS ...  takes too long and has issues
 
 m <- glm.nb(STRIKE ~ `FLTS TOTAL` + `WIND SPEED` + TEMP, data = d, control = list(maxit = 25, epsilon=0.000001, trace=FALSE))
 
 
-d_byday <- d %>% dplyr::filter(year(DATE) %in% 2000:2018) %>%
+d_byday <- d %>% dplyr::filter(year(DATE) %in% 2014:2019) %>%
   group_by(`AIRPORT ID`, DATE) %>% 
   summarise(RTIME=mean(RTIME),STRIKES = sum(STRIKE, na.rm=T), `FLTS TOTAL`=sum(`FLTS TOTAL`, na.rm=T), 
             TEMP = mean(TEMP,na.rm=TRUE),`WIND SPEED`=mean(`WIND SPEED`,na.rm=TRUE))
