@@ -208,7 +208,7 @@ return (data_w)
 ```
 
 ```{r Writing the weather file}
-# Calculate precipitation per hour
+# TO DO Calculate precipitation per hour
 # Round to nearest 15? 60? minutes, then average (to ensure observations close in time get averaged together, not necessarily close in hour)
 
 data_w <- loadAndCombine("KDEN")
@@ -218,7 +218,7 @@ data_w$TEMPTIME <- round_date(data_w$DTIME,"60 minutes")
 data <- data_w %>%
   group_by(`AIRPORT ID` = `AIRPORT ID`, DATE = as.Date(TEMPTIME), #values midnight the night before
            RTIME = hour(TEMPTIME)) %>% 
-  summarise(`WIND ANGLE` = mean(`WIND ANGLE`), `WIND SPEED` = mean(`WIND SPEED`),
+  summarise(`WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), `WIND SPEED` = mean(`WIND SPEED`, na.rm=TRUE),
             TEMP = mean(TEMP, na.rm=TRUE),
             SLP = mean(SLP, na.rm=TRUE),
             VIS = mean(`VIS DISTANCE`, na.rm = TRUE),
@@ -228,6 +228,7 @@ data <- data_w %>%
 
 saveRDS(data, "KDEN Weather.RDS")
 rm(data,data_w, lookup, baseURL, loadAndCombine)
+
 
 ```
 
