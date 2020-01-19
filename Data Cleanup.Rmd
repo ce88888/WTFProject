@@ -1,0 +1,253 @@
+---
+title: "FeatureSelection"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
+```
+
+```{r Check installed packages, echo = FALSE}
+
+# Function to Install and Load R Packages
+install.load.packages <- function(required.packages)
+{
+  required.packages <-
+    required.packages[!(required.packages %in% installed.packages()[, "Package"])]
+  
+  
+  if (length(required.packages))
+  {
+    install.packages(required.packages, repos = 'http://cran.us.r-project.org');
+  }
+  for (package.name in required.packages)
+  {
+    library(package.name,
+            character.only = TRUE,
+            quietly = TRUE)
+    
+  }
+}
+
+# Specify the list of required packages to be installed and load
+required.packages = c(
+  "tidyverse",
+  "lubridate",
+  "ggplot2",
+  "reshape2",
+  "mice",
+  "VIM"
+)
+
+
+# Call the Function
+install.load.packages(required.packages)
+
+
+```
+
+```{r Import Data, echo = FALSE, message=FALSE,warning=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(reshape2)
+library(mice)
+library(VIM)
+
+```
+
+```{r}
+# Read dataset from RDS
+strikes <- readRDS("KDEN model data all flights.rds")
+
+# Check for NAs in all columns
+colSums(is.na(strikes))
+```
+
+```{r}
+
+# check the data for flt hits and group them to see if there are more than 1 hit in the same hour. 
+# new.df <- strikes %>% filter(strikes$STRIKE == 1)
+# 
+# flt.hit.grp <-
+#   new.df %>%
+#   group_by(new.df$DATE, new.df$RTIME) %>%
+#   summarise(flt_count=n())
+# 
+# flt.hit.grp
+
+
+# As there are no more than 1 flt hits in any given hour updating the the flt hits to 1 when strikes = 1
+
+# This is only useful when we are aggregating data by day, else it is redundant to strikes
+# strikes$`FLTS HIT`[strikes$STRIKE == 1] <- 1
+```
+
+```{r}
+# With the initial dataset which Christian created all the flight counts when strikes = 1 were all NAs. 
+# To adjust that created 3 new columns arrival count, departure count, total count. 
+
+
+# Read flight data
+flt.data  <- readRDS("KDEN flights.rds")
+
+# Join flights with model dataset
+df <- left_join(strikes, flt.data,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE", "RTIME" = "RTIME"))
+
+# Filter dataset for all data after 1995
+df <- df %>% filter(df$DATE > '1995-01-01')
+
+# When strikes = 0 get all the complete cases and then merge that with the data which has strikes
+temp <- df %>% filter(df$STRIKE == 0) %>% filter_at(vars(8:15), all_vars(complete.cases(.)))
+
+with.strikes <- df %>% filter(df$STRIKE == 1)
+
+df <- rbind(temp, with.strikes)
+
+# overwrite df by removing all the columns which are uneccessary
+df <- within(df, rm('FLTS TOTAL', 'FLTS NOT HIT', 'FLTS HIT'))
+
+```
+
+```{r}
+# Look at all the columns data via histograms
+
+d <- melt(df[, -c(1:4)])
+ggplot(d, aes(x = value)) +
+  facet_wrap( ~ variable, scales = "free_x") +
+  geom_histogram()
+```
+
+```{r}
+# Look at the patterns in the data - shows number of observations with different patterns of NAs
+md.pattern(df)
+```
+
+```{r}
+# Plot the missing values as a heat map
+
+# #plot the missing values
+# n_miss = aggr(
+#   df,
+#   col = mdc(8:16),
+#   numbers = TRUE,
+#   sortVars = TRUE,
+#   labels = names(df),
+#   cex.axis = .7,
+#   gap = 3,
+#   ylab = c("Proportion of missingness", "Missingness Pattern")
+# )
+```
+
+```{r}
+#Imputing missing values using mice 
+# This doesnt work. probably want to remove this but wait till we dont see a usecase for this.
+
+# mice_imputes <- mice(df[8:16], m=5, maxit = 10, printFlag = TRUE, method = c('pmm'))
+```
+
+```{r}
+# Perform KNN imputations on the above columns to fill in NA values using KNN imputations
+# Works perfectly for all the columns except for birdcount because of the high number of NA values
+
+  # strikes_data_imputed <-
+  #   kNN(
+  #     df,
+  #     variable = c(
+  #       "WIND ANGLE",
+  #       "WIND SPEED",
+  #       "TEMP",
+  #       "SLP",
+  #       "VIS",
+  #       "CLOUDH",
+  #       "COVER",
+  #       "COVERH"
+  #     ),
+  #     dist_var = c(
+  #       "WIND ANGLE",
+  #       "WIND SPEED",
+  #       "TEMP",
+  #       "SLP",
+  #       "VIS",
+  #       "CLOUDH",
+  #       "COVER",
+  #       "COVERH"
+  #     ),
+  #     k = 5,
+  #     trace = TRUE
+  #   )
+```
+
+```{r}
+### Save the imputed data to RDS. if we want to look at all the data with the imputed columns
+saveRDS(strikes_data_imputed,"KDEN_KNN_Imputed.RDS")
+
+# Reading the imputed data to dataframe again
+df <- readRDS("KDEN_KNN_Imputed.RDS")
+```
+
+```{r}
+# Remove the imputed or not bool columns and save to rds again
+df <- within(df, rm("WIND ANGLE_imp", "WIND SPEED_imp", "TEMP_imp", "SLP_imp", "VIS_imp", "CLOUDH_imp", "COVER_imp", "COVERH_imp"))
+
+# Fill all NA values with 0 in bird count - initial thought was to just retain them
+df$BIRDCOUNT[is.na(df$BIRDCOUNT)] <- 0
+
+# But will probably be a better idea to remove that data when strikes = 0 
+no.bird.strike <- df %>% filter(df$STRIKE == 0 & df$BIRDCOUNT != 0)
+
+bird.strike <- df %>% filter(df$STRIKE == 1 )
+
+df <- rbind(bird.strike, no.bird.strike)
+
+# A filnal check of NAs in all columns
+colSums(is.na(df))
+
+```
+
+```{r}
+# How about now impute the bird count data when strikes = 1 there are a bunch of 0 when strike = 1
+
+# df$BIRDCOUNT[df$BIRDCOUNT == 0] <- NA
+# 
+# strikes_data_imputed <-
+#   kNN(
+#     df,
+#     variable = c("BIRDCOUNT"),
+#     dist_var = c(
+#       "WIND ANGLE",
+#       "WIND SPEED",
+#       "TEMP",
+#       "SLP",
+#       "VIS",
+#       "CLOUDH",
+#       "COVER",
+#       "COVERH"
+#     ),
+#     k = 5,
+#     trace = TRUE
+#   )
+# 
+# saveRDS(strikes_data_imputed,"KDEN_KNN_BirdCount_Imputed.RDS")
+
+```
+
+
+```{r}
+# Reading the imputed data to dataframe again
+df <- readRDS("KDEN_KNN_BirdCount_Imputed.RDS")
+
+# Remove the imputed or not bool columns and save to rds again
+df <- within(df, rm("BIRDCOUNT_imp"))
+
+# Write to RDS
+saveRDS(df,"KDEN_FINAL.RDS")
+```
+
