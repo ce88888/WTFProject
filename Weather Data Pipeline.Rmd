@@ -137,8 +137,11 @@ loadAndCombine <- function(airport, folder = "/weather/"){
     mutate(`WIND SPEED` = as.numeric(`WIND SPEED`) %>% na_if(9999)) %>%
     mutate(TEMP = as.numeric(TEMP) %>% na_if(9999)) %>%
     mutate(COVER = as.numeric(COVER) %>% na_if(9)) %>%
+    mutate(`PRECIP TIME` = as.numeric(`PRECIP TIME`) %>% na_if(99)) %>%
+    mutate(`PRECIP DEPTH` = as.numeric(`PRECIP DEPTH`) %>% na_if(9999)) %>%
     mutate(`REPORT TYPE` = as.factor(`REPORT TYPE`)) %>%
-    mutate(`AIRPORT ID` = as.factor(`AIRPORT ID`))
+    mutate(`AIRPORT ID` = as.factor(`AIRPORT ID`)) %>% 
+    mutate(`PRECIP` = `PRECIP DEPTH` / `PRECIP TIME`)
   
 
   return(data_w)
@@ -211,6 +214,8 @@ return (data_w)
 # TO DO Calculate precipitation per hour
 # Round to nearest 15? 60? minutes, then average (to ensure observations close in time get averaged together, not necessarily close in hour)
 
+processWeatherFiles("KDEN")
+
 data_w <- loadAndCombine("KDEN")
 
 data_w$TEMPTIME <- round_date(data_w$DTIME,"60 minutes")
@@ -224,7 +229,8 @@ data <- data_w %>%
             VIS = mean(`VIS DISTANCE`, na.rm = TRUE),
             CLOUDH = mean(`CLOUD HEIGHT`, na.rm=TRUE),
             COVER = mean(`COVER`,na.rm=TRUE),
-            COVERH = mean(`COVER HEIGHT`,na.rm=TRUE)) 
+            COVERH = mean(`COVER HEIGHT`,na.rm=TRUE),
+            PRECIP = mean(`PRECIP`, na.rm=TRUE)) 
 
 saveRDS(data, "KDEN Weather.RDS")
 rm(data,data_w, lookup, baseURL, loadAndCombine)

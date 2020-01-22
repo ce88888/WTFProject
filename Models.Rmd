@@ -116,7 +116,7 @@ summary(m_day_mfactor)
 m <-glmer.nb(STRIKES ~ `FLTS TOTAL` +  (1|MONTH), data = d_day)
 
 m <-glm.nb(STRIKES ~`FLTS TOTAL` + VIS + TEMP + COVERH + CLOUDH + SLP + BIRDCOUNT +
-             `WIND SPEED` + `WIND ANGLE`, data = d_day)
+             `WIND SPEED` + `WIND ANGLE` + as.factor(WEEK), data = d_day_hour)
 
 m_count_day_notime <- hurdle(STRIKES ~ SLP + BIRDCOUNT + `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
                               CLOUDH + COVERH + VIS, 
