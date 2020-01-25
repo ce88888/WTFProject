@@ -1,0 +1,247 @@
+---
+title: "FeatureSelection"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
+```
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+
+# Creating a vector of packages used within
+packages <- c('tidyverse',
+              'data.table',
+              'scales',
+              'magrittr',
+              'tidyselect',
+              'lubridate',
+              'zoo',
+              'VIM',
+              'Rtsne',
+              'MASS',
+              'leaps',
+              'car',
+              'caret',
+              'randomForest',
+              'PerformanceAnalytics',
+              'pROC',
+              'e1071',
+              'DMwR',
+              'caTools',
+              'ROCR'
+              )
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+library(ROCR)
+
+```
+
+```{r}
+# Read dataset from RDS
+model.data <- readRDS("KDEN_FINAL.RDS")
+#names(model.data)
+```
+
+```{r}
+
+#Running the Code to Group the Data by Day. THis removes Rtime, Arrivals, Departures
+model.data.day <- model.data %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`TOTAL` = sum(`TOTAL`), 
+            STRIKE = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), 
+            SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), 
+            `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            `COVER`= mean(`COVER`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), 
+            COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T)) %>%
+  mutate(STRIKE = ifelse(STRIKE>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+#Converting the new day data into a data frame 
+model.data.day<-as.data.frame(model.data.day)
+
+# Add Year, Month, Day and Weekday fields to  the dataset as factors
+date.add <- data.frame(
+  YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
+  MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
+  DAY = as.factor(format(model.data.day$DATE, format = "%d")),
+  WEEKOFDAY = as.factor(format(model.data.day$DATE, format = "%V"))
+)
+
+# Bind new cols to the original dataset
+model.data.day <- cbind(model.data.day, date.add)
+
+# Remove AirportId and Date columns
+model.data.day <- model.data.day[,-c(1,2)]
+
+# Rename Windangle and windspeed
+model.data.day <-
+  model.data.day %>% dplyr::rename(WANGLE = `WIND ANGLE`,
+                               WSPEED = `WIND SPEED`)
+
+# Because of memory constraints considering only 2 years data
+model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2017,2018))
+
+# Converting target as a factor
+model.data.day$STRIKE <- as.factor(model.data.day$STRIKE)
+
+#verifying if there are any NAs
+NAs <-is.na.data.frame(model.data.day)
+cotable(NAs)
+```
+
+```{r}
+# SMOTE oversampling for Classification 
+balanced.data.day<-
+  SMOTE(
+    STRIKE ~  RTIME + WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
+    model.data.day,
+    perc.over = 1000,
+    k = 10,
+    perc.under = 500
+  )
+
+
+```
+
+
+```{r Run Multivariate Regression for variable selection}
+# Target variable needs to be a numeric for running a regression
+# The below list has been modified after going through these stages and variable importance.
+# Originally provided all the variables and finally left with the below list
+
+# Initial Model:
+# as.numeric(STRIKE) ~ RTIME + WANGLE + WSPEED + TEMP + CLOUDH + 
+#     COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY
+# 
+# Final Model:
+# as.numeric(STRIKE) ~ RTIME + WSPEED + COVER + BIRDCOUNT + TOTAL + 
+#     MONTH
+
+fit <-
+  lm(
+    as.numeric(STRIKE) ~ WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
+    data = balanced.data.day
+  )
+summary(fit)
+step <- stepAIC(fit)
+step$anova # display results
+```
+
+
+
+```{r}
+# All Subsets Regression
+# Leaps doesnt run on balanced dataset. Too many linear dependencies confuse the package. 
+# attach(balanced.data)
+# leaps <-
+#   regsubsets(
+#     as.numeric(STRIKE) ~ RTIME + WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
+#     data = balanced.data, really.big = TRUE
+#   )
+# # view results
+# summary(leaps)
+# # plot a table of models showing variables in each model.
+# # models are ordered by the selection statistic.
+# plot(leaps, scale = "r2")
+```
+
+```{r}
+# Use Random Forest variable importance technique for variable selection
+# The below list has been tailored after multiple iterations
+fit = randomForest::randomForest(
+  STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
+  data = balanced.data.day,
+  importance = TRUE,
+  proximity = TRUE)
+importance(fit)
+
+varImp(fit)
+varImpPlot(fit, type = 2)
+importanceOrder = order(-fit$importance)
+
+names = rownames(fit$importance)[importanceOrder][1:18]
+View(names)
+```
+
+
+```{r}
+
+split <- sample.split(balanced.data.day$STRIKE, SplitRatio = 0.75)
+train <- subset(balanced.data.day, split == TRUE)
+test <- subset(balanced.data.day, split == FALSE)
+```
+
+
+
+```{r}
+ 
+model <-
+  glm(
+    STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
+    data = train,
+    family = binomial
+  )
+summary(model)
+```
+```{r}
+## Predict the Values
+predict <- predict(model, test, type = 'response')
+
+## Create Confusion Matrix
+table(test$STRIKE, predict > 0.3)
+
+
+```
+
+```{r}
+# ROC Curve
+ROCRpred <- prediction(predict, test$STRIKE)
+ROCRperf <- performance(ROCRpred, 'tpr','fpr')
+plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
+ROCRperf
+```
+
+```{r}
+rf = randomForest(
+  STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
+  ntree = 1000,
+  data = train
+)
+plot(rf) 
+```
+
+
+```{r}
+# Predict using test data and generate confusion matrix
+predicted.response <- predict(rf, test, type = 'response')
+confusionMatrix(data = predicted.response,
+                reference = test$STRIKE)
+```
+
+```{r}
+m <-glm.nb(STRIKES ~`TOTAL` + VIS + TEMP + COVERH + CLOUDH + SLP + BIRDCOUNT +
+             `WIND SPEED` + `WIND ANGLE`, data = model.data.day)
+
+```
+
