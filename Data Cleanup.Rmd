@@ -105,7 +105,7 @@ df <- left_join(strikes, flt.data,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE
 df <- df %>% filter(df$DATE > '1995-01-01')
 
 # When strikes = 0 get all the complete cases and then merge that with the data which has strikes
-temp <- df %>% filter(df$STRIKE == 0) %>% filter_at(vars(8:15), all_vars(complete.cases(.)))
+temp <- df %>% filter(df$STRIKE == 0) %>% filter_at(vars(8:17), all_vars(complete.cases(.)))
 
 with.strikes <- df %>% filter(df$STRIKE == 1)
 
@@ -119,10 +119,10 @@ df <- within(df, rm('FLTS TOTAL', 'FLTS NOT HIT', 'FLTS HIT'))
 ```{r}
 # Look at all the columns data via histograms
 
-d <- melt(df[, -c(1:4)])
-ggplot(d, aes(x = value)) +
-  facet_wrap( ~ variable, scales = "free_x") +
-  geom_histogram()
+# d <- melt(df[, -c(1:4)])
+# ggplot(d, aes(x = value)) +
+#   facet_wrap( ~ variable, scales = "free_x") +
+#   geom_histogram()
 ```
 
 ```{r}
@@ -157,32 +157,34 @@ md.pattern(df)
 # Perform KNN imputations on the above columns to fill in NA values using KNN imputations
 # Works perfectly for all the columns except for birdcount because of the high number of NA values
 
-  # strikes_data_imputed <-
-  #   kNN(
-  #     df,
-  #     variable = c(
-  #       "WIND ANGLE",
-  #       "WIND SPEED",
-  #       "TEMP",
-  #       "SLP",
-  #       "VIS",
-  #       "CLOUDH",
-  #       "COVER",
-  #       "COVERH"
-  #     ),
-  #     dist_var = c(
-  #       "WIND ANGLE",
-  #       "WIND SPEED",
-  #       "TEMP",
-  #       "SLP",
-  #       "VIS",
-  #       "CLOUDH",
-  #       "COVER",
-  #       "COVERH"
-  #     ),
-  #     k = 5,
-  #     trace = TRUE
-  #   )
+  strikes_data_imputed <-
+    kNN(
+      df,
+      variable = c(
+        "WIND ANGLE",
+        "WIND SPEED",
+        "TEMP",
+        "SLP",
+        "VIS",
+        "CLOUDH",
+        "COVER",
+        "COVERH",
+        "PRECIP"
+      ),
+      dist_var = c(
+        "WIND ANGLE",
+        "WIND SPEED",
+        "TEMP",
+        "SLP",
+        "VIS",
+        "CLOUDH",
+        "COVER",
+        "COVERH",
+        "PRECIP"
+      ),
+      k = 5,
+      trace = TRUE
+    )
 ```
 
 ```{r}
@@ -195,7 +197,7 @@ df <- readRDS("KDEN_KNN_Imputed.RDS")
 
 ```{r}
 # Remove the imputed or not bool columns and save to rds again
-df <- within(df, rm("WIND ANGLE_imp", "WIND SPEED_imp", "TEMP_imp", "SLP_imp", "VIS_imp", "CLOUDH_imp", "COVER_imp", "COVERH_imp"))
+df <- within(df, rm("WIND ANGLE_imp", "WIND SPEED_imp", "TEMP_imp", "SLP_imp", "VIS_imp", "CLOUDH_imp", "COVER_imp", "COVERH_imp","PRECIP_imp"))
 
 # Fill all NA values with 0 in bird count - initial thought was to just retain them
 df$BIRDCOUNT[is.na(df$BIRDCOUNT)] <- 0
@@ -229,7 +231,8 @@ colSums(is.na(df))
 #       "VIS",
 #       "CLOUDH",
 #       "COVER",
-#       "COVERH"
+#       "COVERH",
+#       "PRECIP"
 #     ),
 #     k = 5,
 #     trace = TRUE
@@ -249,5 +252,7 @@ df <- within(df, rm("BIRDCOUNT_imp"))
 
 # Write to RDS
 saveRDS(df,"KDEN_FINAL.RDS")
+
+View(df)
 ```
 
