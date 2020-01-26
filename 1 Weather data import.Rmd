@@ -1,0 +1,255 @@
+---
+title: "Weather Data Downloads"
+author: "Christian Endter"
+date: "04/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(RCurl)
+library(lubridate)
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+
+### This file contains functions for downloading and processing weather data from NOAA
+### 
+### Workflow (if no local files)
+### (1) call downloadAndProcessWeatherFile("KDEN","72565003017", 1994:2019)
+### (2) call loadAndCombine("KDEN")
+### (3) filter out what is not needed and average values (see "aggregateAndSave")
+
+### downloadAndProcessWeather(lookup, years)
+### - fully automatic downloading and processing for several airports and years
+### - see lookup tibble below for necessary parameterisation
+
+### downloadAndProcessWeatherFile(airport,station,years, process = TRUE, folder = "/weather/")
+### - download file(s) for one airport and multiple years
+### - saves the file as RDS either processed (P) or unprocessed (U)
+
+### processWeatherFiles(airport, fromFolder = "/weatherunprocessed/", toFolder = "/weather/")
+### - process file(s) already downloaded, assumes files in the format are "ICAO YEAR U.csv"
+### - files are written as RDS objects to ease subsequent parsing and combining
+
+### processWeatherData(data)
+### - main processing function which separates columns and eliminates fields not required
+### - returns tibble with desired output data
+
+### loadAndCombine(airport, folder = "/weather/")
+### - loads files with name "ICAO Year P.RDS" and binds them into one tibble, which is returned
+### - rownames are taken from the first first file in the folder
+
+
+# Where to find the NOAA files
+baseURL <- "https://www.ncei.noaa.gov/data/global-hourly/access/"
+
+# Edit the lookup (for fully programatic downloading and processing)
+lookup <- tibble(Airport = c("KDEN", "KPVU", "x"),
+                 Station = c("72565003017", "72572424174", "y"))
+
+# x <- downloadWeatherFiles("KDEN","72565003017", 1994:1996)
+# downloadWeatherFiles("KDEN","72565003017", 2010:2010, process=FALSE, folder = "/weatherunprocessed/")
+##
+
+```
+
+```{r Weather Downloading}
+
+# Programatic downloading of reports for multiple locations across several years
+downloadAndProcessWeather <- function(lookup, years){
+  for (i in nrow(lookup)) {
+    airport <- as.character(lookup[i,1])
+    station <- as.character(lookup[i,2])
+    downloadWeatherFile(airport, station, years)
+  }
+}
+
+# Download and processing of files for one station and a range of years
+downloadAndProcessWeatherFile <- function(airport,station,years, process = TRUE, folder = "/weather/"){
+  
+  for (i in years) {
+    # construct file name and URL
+    fileToFetch <- paste0(as.character(station),".csv")
+    URLtoFetch <- paste0(baseURL,i,"/",fileToFetch)
+    # read the csv and add the airport id
+    x <- read.csv(textConnection(getURL(URLtoFetch)))
+    
+    # Check if the file was retrieved
+    if(x[2,1] == "<title>404 Not Found</title>"){
+      print(paste0("Warning: Station: ",station," not found in year: ", i))
+    } else {
+      
+      # Remove the underscores as it creates issues with some dplyr summarise functions
+      colnames(x) <- str_replace_all(colnames(x),"_"," ")
+      
+      # Process
+      if(process){
+        x <- processWeatherData(x)
+        x$`AIRPORT ID` <- airport  
+      } else {
+        x$`CALL SIGN` <- airport 
+      }
+      
+      # Save the file (note it seems call signs changed over time, at least for Denver, though same lat/long)
+      filename <- getwd() %+% folder %+% airport %+% " " %+% i %+% ifelse(process," P"," U") %+% ".RDS"
+      print(paste0("Saving: ",filename))
+      saveRDS(x,file=filename)
+    }
+  }
+  #return(output)
+}
+```
+
+```{r Processing}
+# Process unprocessed weatherfiles
+processWeatherFiles <- function(airport, fromFolder = "/weatherunprocessed/", toFolder = "/weather/"){
+  filesForAirport <- list.files(paste0(getwd(),fromFolder), pattern = paste0("^",airport))
+  for (f in filesForAirport) {
+    fr <- getwd() %+% fromFolder %+% f
+    print("Processing: " %+% fr)
+    x <- readRDS(fr)
+    x <- processWeatherData(x)
+    filename <- getwd() %+% toFolder %+% str_sub(f, 1, str_length(f)-5) %+% "P.RDS"
+    
+    # Avoid future parsing errors
+    x <- x %>% mutate(`WIND ANGLE QUALITY` = as.character(`WIND ANGLE QUALITY`),
+                      `WIND SPEED QUALITY` = as.character(`WIND SPEED QUALITY`))
+    saveRDS(x,file=filename)
+  }
+}
+
+loadAndCombine <- function(airport, folder = "/weather/"){
+  filesForAirport <- list.files(getwd() %+% folder, pattern = "^" %+% airport)
+  
+  firstFile <- readRDS(getwd() %+% folder %+% filesForAirport[1])
+  for(fn in filesForAirport[2:length(filesForAirport)]){
+    print(paste0("Processing: ",fn))
+    f <- readRDS(getwd() %+% folder %+% fn)
+    firstFile <- bind_rows(firstFile,f)
+  }
+  
+  # Sort out data types and NAs
+  data_w <- firstFile %>%
+    mutate(`VIS DISTANCE` = as.numeric(`VIS DISTANCE`) %>% na_if(999999)) %>%
+    mutate(`CLOUD HEIGHT` = as.numeric(`CLOUD HEIGHT`) %>% na_if(99999)) %>%
+    mutate(`CLOUD CAVOK` = as.factor(`CLOUD CAVOK`) %>% na_if(9)) %>%
+    mutate(SLP = as.numeric(SLP) %>% na_if(99999)) %>%
+    mutate(`COVER HEIGHT` = as.numeric(`COVER HEIGHT`) %>% na_if(99999)) %>%
+    mutate(`WIND ANGLE` = as.numeric(`WIND ANGLE`) %>% na_if(999)) %>%
+    mutate(`WIND SPEED` = as.numeric(`WIND SPEED`) %>% na_if(9999)) %>%
+    mutate(TEMP = as.numeric(TEMP) %>% na_if(9999)) %>%
+    mutate(COVER = as.numeric(COVER) %>% na_if(9)) %>%
+    mutate(`PRECIP TIME` = as.numeric(`PRECIP TIME`) %>% na_if(99)) %>%
+    mutate(`PRECIP DEPTH` = as.numeric(`PRECIP DEPTH`) %>% na_if(9999)) %>%
+    mutate(`REPORT TYPE` = as.factor(`REPORT TYPE`)) %>%
+    mutate(`AIRPORT ID` = as.factor(`AIRPORT ID`)) %>% 
+    mutate(`PRECIP` = `PRECIP DEPTH` / `PRECIP TIME`)
+  
+
+  return(data_w)
+}
+
+# Function to process the data, split columns, and remove what is not needed
+processWeatherData <- function(data_w){
+
+## Processing and clean-up
+# Wind data
+data_w <- data_w %>% separate(WND, into=c("WIND ANGLE", "WIND ANGLE QUALITY", "WIND TYPE", 
+                                         "WIND SPEED", "WIND SPEED QUALITY"), 
+                             sep=",", remove=TRUE)
+
+# Cloud cover
+data_w <- data_w %>% separate(CIG, into=c("CLOUD HEIGHT","HEIGHT QUALITY", "HEIGHT METHOD", "CLOUD CAVOK"),
+                                          sep=",", remove=TRUE)
+
+data_w <- data_w %>% separate(GD1, into=c("COVER", "COVER2", "COVER QUALITY", "COVER HEIGHT", 
+                                          "COVER HEIGHT QUALITY", "COVER CHARACTERISTICS"),
+                                          sep=",", remove=TRUE)
+
+# Visibility
+data_w <- data_w %>% separate(VIS, into=c("VIS DISTANCE","VIS DIST QUALITY","VIS DIST VAR",
+                                          "VIS DIST VAR QUALITY"), sep=",", remove=TRUE)
+
+# Temperature
+data_w <- data_w %>% separate(TMP, into=c("TEMP","TEMP QUALITY"),sep=",", remove=TRUE)
+
+# Pressure
+data_w <- data_w %>% separate(SLP, into=c("SLP","SLP QUALITY"),sep=",", remove=TRUE)
+
+# Precipitation
+data_w <- data_w %>% separate(AA1, into=c("PRECIP TIME","PRECIP DEPTH", 
+                                          "PRECIP CONDITION","PRECIP QUALITY"),
+                              sep=",", remove=TRUE, convert=TRUE)
+
+# Date and Time
+data_w <- data_w %>% 
+  mutate(RTIME = hour(hms(substr(DATE,12,19))),
+         DTIME = ymd_hms(paste0(substr(DATE,1,10)," ",substr(DATE,12,19))),
+         DATE = ymd(substr(DATE,1,10)))
+
+## Select only the variables required .... this seeks to eliminate daily and monthly summaries and other reports which should not be relevant
+data_w$`REPORT TYPE` <- str_trim(data_w$`REPORT TYPE`)
+data_w <- data_w %>%
+  filter(`REPORT TYPE` %!in% c("AUST", "BOGUS", "BRAZ", "COOPD", "SOD","SOM")) %>%
+  dplyr::select(`AIRPORT ID` = `CALL SIGN`, DATE, DTIME, RTIME, `REPORT TYPE`, ELEVATION,
+         "WIND ANGLE", "WIND ANGLE QUALITY", "WIND TYPE", "WIND SPEED", "WIND SPEED QUALITY",
+         "CLOUD HEIGHT","HEIGHT QUALITY", "HEIGHT METHOD", "CLOUD CAVOK",
+         "COVER", "COVER2", "COVER QUALITY", "COVER HEIGHT", 
+         "COVER HEIGHT QUALITY", "COVER CHARACTERISTICS",
+         "VIS DISTANCE","VIS DIST QUALITY","VIS DIST VAR","VIS DIST VAR QUALITY",
+         "TEMP","TEMP QUALITY",
+         "SLP","SLP QUALITY",
+         "PRECIP TIME","PRECIP DEPTH", "PRECIP CONDITION","PRECIP QUALITY") %>%
+  mutate(`WIND SPEED QUALITY` = as.character(`WIND SPEED QUALITY`),
+         `WIND ANGLE QUALITY` = as.character(`WIND ANGLE QUALITY`),
+         `VIS DIST QUALITY` = as.character(`VIS DIST QUALITY`),
+         `VIS DIST VAR QUALITY` = as.character(`VIS DIST VAR QUALITY`),
+         `TEMP QUALITY` = as.character(`TEMP QUALITY`),
+         `SLP QUALITY` = as.character(`SLP QUALITY`),
+         `PRECIP QUALITY` = as.character(`PRECIP QUALITY`))
+
+return (data_w)
+}
+
+aggregateAndSave <- function(combinedFilesData, airport = "Not Specified"){
+  
+  data_w$TEMPTIME <- round_date(data_w$DTIME,"60 minutes")
+  
+  data <- data_w %>%
+  group_by(`AIRPORT ID` = `AIRPORT ID`, DATE = as.Date(TEMPTIME), #values midnight the night before
+           RTIME = hour(TEMPTIME)) %>% 
+  summarise(`WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), `WIND SPEED` = mean(`WIND SPEED`, na.rm=TRUE),
+            TEMP = mean(TEMP, na.rm=TRUE),
+            SLP = mean(SLP, na.rm=TRUE),
+            VIS = mean(`VIS DISTANCE`, na.rm = TRUE),
+            CLOUDH = mean(`CLOUD HEIGHT`, na.rm=TRUE),
+            COVER = mean(`COVER`,na.rm=TRUE),
+            COVERH = mean(`COVER HEIGHT`,na.rm=TRUE),
+            PRECIP = mean(`PRECIP`, na.rm=TRUE)) 
+
+  saveRDS(data, airport %+% " Weather.RDS")
+}
+```
+
+```{r Writing the weather file}
+
+### Use case 1: Files already downloaded
+processWeatherFiles("KDEN")
+data_w <- loadAndCombine("KDEN")
+aggregateAndSave(data_w,airport="KDEN")
+rm(data,data_w, lookup, baseURL, loadAndCombine)
+
+### Use case 2: No local data
+### Note: Can alternatively call downloadAndProcessWeather(lookup, years) for more than one airport
+downloadAndProcessWeatherFile("KDEN","72565003017", 1995:1995)
+data_w <- loadAndCombine("KDEN")
+aggregateAndSave(data_w,airport="KDEN")
+rm(data_w, lookup, baseURL, loadAndCombine)
+
+
+```
+
+
+

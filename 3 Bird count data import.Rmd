@@ -1,0 +1,36 @@
+---
+title: "Bird Count Data Import"
+author: "Christian Endter"
+date: "26/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(padr)
+
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+### Purpose  
+This file contains code to read the e-bird birdcount export and to save it as an RDS file.
+
+Note that import and clean-up should not restrict the date range, as this should be done during model training, as appropriate.
+
+## To do:
+* Future refinement re getting bird count data directly from API for different airports
+
+```{r Bird numbers}
+# Note - currently only have daily data, so for now set RTIME to NA
+data_birdcounts <- read.csv("birdCount_Aggregated.csv") %>% 
+  dplyr::select(DATE = observationDate, COUNT = birdCount) %>%
+  mutate(DATE = ymd(DATE), RTIME=NA) %>%
+  mutate(`AIRPORT ID` = as.factor("KDEN"))
+
+saveRDS(data_birdcounts, "KDEN Birdcounts.RDS")
+
+rm(data_birdcounts)
+```

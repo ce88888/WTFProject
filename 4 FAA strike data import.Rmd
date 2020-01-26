@@ -1,0 +1,166 @@
+---
+title: "FAA import and cleaning"
+author: "Christian Endter"
+date: "12/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+
+```
+
+# Import
+```{r FAA Data Import and Clean-Up}
+# Import the FAA strikes DB file
+data_all <- read.csv("Strikes_Master_v3.csv", na.strings=c("NA",""))
+
+# Remove the underscores as it creates issues with some dplyr summarise functions
+colnames(data_all) <- str_replace_all(colnames(data_all),"_"," ")
+
+# For some reason the field names are no longer capitalised in this version of the file
+colnames(data_all) <- toupper(colnames(data_all))
+
+# Clean up date and time information
+data_all$`INCIDENT DATE` <- mdy(data_all$`INCIDENT DATE`)
+data_all$`INCIDENT MONTH` <- month(data_all$`INCIDENT DATE`,label=TRUE, abbr=TRUE)
+data_all$`INCIDENT YEAR` <- year(data_all$`INCIDENT DATE`)
+  
+# Time of Day field - label consistency
+data_all$`TIME OF DAY` <- str_replace_all(data_all$`TIME OF DAY`,"Day","DAY")
+data_all$`TIME OF DAY` <- str_replace_all(data_all$`TIME OF DAY`,"Dawn","DAWN")
+data_all$`TIME OF DAY` <- str_replace_all(data_all$`TIME OF DAY`,"Dusk","DUSK")
+data_all$`TIME OF DAY` <- str_replace_all(data_all$`TIME OF DAY`,"Night","NIGHT")
+
+# Phase of Flight field
+data_all <- data_all %>% 
+  mutate(`PHASE OF FLT` = as.factor(replace_na(as.character(`PHASE OF FLT`),"UNKNOWN"))) %>%
+  mutate(`PHASE OF FLT` = recode(`PHASE OF FLT`,"Approach" = "APPROACH", "approach" = "APPROACH",
+                                 "Arrival" = "ARRIVAL", "arrival" = "ARRIVAL",
+                                 "Climb" = "CLIMB", "climb" = "CLIMB",
+                                 "Departure" = "DEPARTURE", 
+                                 "En Route"  = "EN ROUTE", "En route" = "EN ROUTE",
+                                 "Landing roll" = "LANDING ROLL", "Landing Roll" = "LANDING ROLL", 
+                                 "landing roll" = "LANDING ROLL",
+                                 "Local" = "LOCAL", "Unknown" = "UNKNOWN",
+                                 "Take-off run" = "TAKE-OFF RUN","Take-off Run" = "TAKE-OFF RUN",
+                                 "take-off run" = "TAKE-OFF RUN",
+                                 "Descent" = "DESCENT", "Taxi" = "TAXI", "Parked" = "PARKED"))
+# SKY field 
+data_all <- data_all %>% 
+  mutate(SKY = as.factor(replace_na(as.character(SKY),"UNKNOWN"))) %>%
+  mutate(SKY = recode(SKY, "No Cloud" = "NO CLOUD", "No CLoud" = "NO CLOUD", "NO Cloud" = "NO CLOUD",
+                      "Overcast" = "OVERCAST","Some Cloud" = "SOME CLOUD", "SOme Cloud" = "SOME CLOUD", 
+                      "Some Clouds" = "SOME CLOUD")) %>%
+  mutate(SKY = fct_relevel(SKY, "UNKNOWN", "NO CLOUD", "SOME CLOUD", "OVERCAST"))
+  
+# PRECIP field
+data_all <- data_all %>% 
+  mutate(PRECIP = as.factor(replace_na(as.character(PRECIP), "UNKNOWN"))) %>%
+  mutate(PRECIP = recode(PRECIP, "None" = "NONE","NoNe" = "NONE","Snow" = "SNOW", "Rain" = "RAIN",
+                         "Fog" = "FOG", "Fog, Rain" = "FOG, RAIN", "Fog, Rain, Snow" = "FOG, RAIN, SNOW",
+                         "Fog, Snow" = "FOG, SNOW", "Rain, Snow" = "RAIN, SNOW")) %>%
+  mutate(PRECIP = fct_relevel(PRECIP, "UNKNOWN", "NONE", "FOG", "RAIN", "SNOW", "RAIN, SNOW" ))
+
+# TOD field
+data_all <- data_all %>% 
+  mutate(LIGHT = as.factor(replace_na(`TIME OF DAY`, "UNKNOWN"))) %>%
+  mutate(LIGHT = recode(LIGHT, "Dawn" = "DAWN", "Day" = "DAY", "Dusk" = "DUSK", "Night" = "NIGHT")) 
+
+# Runway field - make NAs explicit
+data_all$RUNWAY <- fct_explicit_na(data_all$`RUNWAY`, na_level =  "UNKNOWN")
+
+## Work with time field
+# Turn time of day into a factor
+data_all$`TIME OF DAY` <- as.factor(data_all$`TIME OF DAY`)
+
+# Create adjusted time field by getting the hour of the day - for matching the flight numbers and weather data
+data_all$RTIME <- ymd_hm(paste0(as.character(data_all$`INCIDENT DATE` )," ",as.character(data_all$TIME)), tz="America/Denver") %>%
+  hour()
+
+# Add strike indicator (to use in sum() later)
+data_all$STRIKE = 1
+
+# ~~~~ TO BE DONE
+# Note - ToD for FAA is meant to describe light conditions, so we can't simply map from Time field as the light conditions will shift over the course of the year. We can try to source dawn/dusk times for KDEN, but not sure if that is really helpful
+# Aircrew in the end will want to know a particular time slot - but
+# We have 286 populated TOD fields where we are missing time for KDEN, so worth at least approximating
+# More importantly, we are missing 4044 time fields, where we could only go to the day
+
+# ~~~~ DISCUSS
+# Our Time of Day - do we have research which motivates distinct periods birds prefer to fly or not? ... in hot locations it may be that they dont' fly over lunch, but in Denver they may? FOR NOW (change in function if we want to update as this is used further down)
+# morning 6 - 9 -> hours 6,7,8
+# day 9 - 18 -> hours 9 - 17
+# evening 18 - 20 -> hours 18, 19
+# night 20 - 6 -> hours 20 - 5
+# UNKNOWN = NO TIME IN FAA FILE
+
+makeTD <- function(hour_of_day){
+  xyz <- case_when(hour_of_day %in% 6:8          ~ "MORNING",
+                   hour_of_day %in% 9:17         ~ "DAY",
+                   hour_of_day %in% 18:19        ~ "EVENING",
+                   hour_of_day %in% c(20:24,0:5) ~ "NIGHT",
+                   is.na(hour_of_day)            ~ "UNKNOWN")
+  xyz <- factor(xyz, levels =c("UNKNOWN","MORNING","DAY","EVENING","NIGHT"))
+  return(xyz)
+}
+
+# data_all <- data_all %>% 
+#   mutate(TD = makeTD(RTIME))
+
+# Set time to average time of day
+# Set time of day according to time
+
+# # check where we have time but no time of day - 2K observations
+# # exploration - a lot can be cleaned up
+# # note that the FAA form does not enforce consistency between the time and ToD fields
+# data_all %>% filter(!is.na(TIME) & is.na(`TIME OF DAY`)) %>% nrow()
+# # note: no clear boundaries in terms of time vs. ToD
+# # TODO: Fix later if there is clear guidance from FAA
+# x <-data_all %>% filter(!is.na(TIME), `TIME OF DAY`=="DAY") %>% dplyr::select(TIME)
+# x <-data_all %>% filter(!is.na(TIME), `TIME OF DAY`=="DAWN") %>% dplyr::select(TIME)
+# x <-data_all %>% filter(!is.na(TIME), `TIME OF DAY`=="DUSK") %>% dplyr::select(TIME)
+# x <-data_all %>% filter(!is.na(TIME), `TIME OF DAY`=="NIGHT") %>% dplyr::select(TIME)
+# 
+# # check if ToD populated but TIME isn't - 33K observations
+# data_all %>% filter(!is.na(`TIME OF DAY`) & is.na(TIME)) %>% nrow()
+# # TODO: Back-out median time to fill in NAs
+
+
+# ~~~~~~~~
+## Select only data fields needed
+data <- data_all %>% 
+  dplyr::filter(`AIRPORT ID` == "KDEN") %>%
+  dplyr::select(DATE = `INCIDENT DATE`,STRIKE, RTIME, LIGHT,
+                `TIME`,`AIRPORT ID`,`SKY`,`PRECIP`,`RUNWAY`) %>% 
+  dplyr::filter(`DATE` < "2018-12-31")
+
+# clean up factor levels
+data <- data %>% mutate(`AIRPORT ID` = as.factor(as.character(`AIRPORT ID`)))
+
+saveRDS(data,"KDEN FAA.RDS")
+rm(data,data_all)
+
+## Some runway work to be done
+# KDEN runways (6 in total): 16R 34L, 16L 34R, 8 26, 7 25, 17R 35L, 17L 35R
+# Consolidate all combinations which refer to the same runway into the same factor level, then go after the taxiways ... arguably can put all of them into one variable
+#levels(data$RUNWAY)
+
+#rws <- toupper(as.character(data$RUNWAY))
+#sum(str_detect(rws,regex("T?")))
+
+  
+
+# data <- data_all %>% 
+#   dplyr::select(`INDEX NR`,DATE = `INCIDENT DATE`, MONTH = `INCIDENT MONTH`, YEAR = `INCIDENT YEAR`,
+#                 TOD = `TIME OF DAY`,`TIME`,`AIRPORT ID`,`SKY`,`PRECIP`,`AIRPORT`,`RUNWAY`,`LOCATION`, 
+#          `REG`, `SPEED`,`HEIGHT`,`PHASE OF FLT`,`FLT`,`DAMAGE`,`SPECIES ID`,`SIZE`,`OPERATOR`,`REG`,`ATYPE`,
+#          `AC CLASS`) %>% 
+#   mutate(WEEK = week(DATE)) %>%
+#   filter(`DATE` < "2018-12-31") %>%
+#   filter(`AIRPORT ID` %in% c("KDEN","KSMF","KDFW", "KORD")) %>%
+
+```

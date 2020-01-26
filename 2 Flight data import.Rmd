@@ -1,0 +1,55 @@
+---
+title: "Flight data import and cleaning"
+author: "Christian Endter"
+date: "14/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(padr)
+
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+### Purpose  
+This file contains code to read in the arrivals and departure data in order to then supplement them with the RTIME field, creating correct hour totals. The file is then saved as RDS objects.  
+
+Note that import and clean-up should not restrict the date range, as this should be done during model training, as appropriate.
+
+## To do:
+* Flight numbers need to be scaled to match flight reporting in the FAA File
+* Need to accommodate other airports in the future
+
+```{r Flight numbers}
+# Import arrivals and departures (as per file sourced from Krishna)
+# N.B. The departures and arrivals empty columns are needed as this is faster than pivoting the final table
+data_arrivals <- read.csv("Airline_Arrivals_Group.csv") %>% 
+  rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>% 
+  mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+data_departures <- read.csv("Airline_Departures_Group.csv") %>%
+  rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>% 
+  mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+data_flights <- bind_rows(data_arrivals,data_departures) %>%
+  mutate(DATE = ymd(DATE), TOTAL = ARRIVALS + DEPARTURES)
+
+# Convert time field to rounded hours for subsequent matching, add Airport ID column
+data_flights$RTIME <- hour(ymd_hm(paste0(data_flights$DATE," ",substr(data_flights$TIME,1,4)))) 
+data_flights$`AIRPORT ID` <- as.factor("KDEN")
+
+data_flights <- data_flights %>%
+  group_by(`AIRPORT ID`,DATE,RTIME) %>%
+  summarise(ARRIVALS = sum(ARRIVALS), DEPARTURES = sum(DEPARTURES), TOTAL = sum(TOTAL))
+
+saveRDS(data_flights, "KDEN Flights.RDS")
+
+# Cleanup
+rm(data_arrivals, data_departures, data_flights)
+```
+
+
+
+

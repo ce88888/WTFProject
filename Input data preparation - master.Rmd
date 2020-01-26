@@ -1,0 +1,50 @@
+---
+title: "Input Data Preparation - Master"
+author: "Christian Endter"
+date: "26/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary of data preparation steps
+
+### 1 -- Weather data (File: "1 Weather data import.RMD")
+1. Files have already been downloaded (but not processed)  
+- Use the `processWeatherFiles(airport, fromFolder = "/weatherunprocessed/", toFolder = "/weather/")` function, which will read the files in their raw form, split columns, change data types, and then save the resulting files as RDS objects. If the downloaded files were already processed while downloading, go straight to the next step.  
+- Call the `loadAndCombine(airport, folder = "/weather/")` function to obtain the consolidated weather data object.  
+- Call the `aggregateAndSave(data_combined, airport)` function to aggregate multiple observations to hourly level and save the resulting file as an RDS with filename 'airport Weather.RDS'
+  
+2. Starting from scratch  
+- Call the `downloadAndProcessWeatherFile("KDEN","72565003017", 1994:2019)` function specifying the airport code, station and years. Alternatively `downloadAndProcessWeather(lookup, years)` enables the downloading of data for multiple airports. Note that the first function also allows you to download files without processing them.
+- Call `loadAndCombine("KDEN")`
+- Call `aggregateAndSave(data_combined,airport="KDEN")`
+
+
+### 2 -- Flight data (File: "2 Flight data import.RMD")
+1. Run the first code chunk to import from the arrivals and departures files
+
+### 3 -- Bird count data (File: "3 Bird count data import.RMD")
+1. Run the second code chunk to import from the ebird database file  
+
+*These two steps will create two RDS files with the respective data - Note that this hard-codes "KDEN" as the airport and will need adjustment for other airports.*
+
+### 4 -- FAA Strike data (File: "4 FAA strike data import.RMD")
+The code imports the Strikes_Master.csv with the FAA data and processes the variables to explictly label NAs, and to consolidate various spelling variations into the right factor levels.  
+
+1. Adjust which fields to take into the final file (ca. line 130), in particular with respect to the airports.
+2. If necessary, uncomment lines 141 and 142 to ensure the file is being saved
+
+### 5 -- Consolidation of files into the master data file (File: "5 Model file creation.rmd)  
+
+This file can be run as-is, and should work for more than one airport, provided the individual input files contain that airport's information.  
+Note the code in lines 38, 39 which currently removes the FAA provided fields (runway, sky condition, light/ToD), edit as appropriate. 
+Note in particular:  
+- Any FAA entries without time (translated to RTIME, i.e. time rounded) are dropped.  
+- Entries are grouped by RTIME (i.e. by hour), although rarely the case, some day/RTIME combinations have multiple strikes, however entries are not aggregated by hour (i.e. there are individual lines for each strike).
+- The code currently does not differentiate between arrivals/departures, in the future, Step 2 (ca. line 55) should be adjusted to separate these out, if desired.
+
+
+
