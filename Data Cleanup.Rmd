@@ -91,28 +91,29 @@ colSums(is.na(strikes))
 ```
 
 ```{r}
+## DEPRECATED - DONE IN "5 Model file creation.RMD"
 # With the initial dataset which Christian created all the flight counts when strikes = 1 were all NAs. 
 # To adjust that created 3 new columns arrival count, departure count, total count. 
 
 
-# Read flight data
-flt.data  <- readRDS("KDEN flights.rds")
-
-# Join flights with model dataset
-df <- left_join(strikes, flt.data,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE", "RTIME" = "RTIME"))
-
-# Filter dataset for all data after 1995
-df <- df %>% filter(df$DATE > '1995-01-01')
-
-# When strikes = 0 get all the complete cases and then merge that with the data which has strikes
-temp <- df %>% filter(df$STRIKE == 0) %>% filter_at(vars(8:17), all_vars(complete.cases(.)))
-
-with.strikes <- df %>% filter(df$STRIKE == 1)
-
-df <- rbind(temp, with.strikes)
-
-# overwrite df by removing all the columns which are uneccessary
-df <- within(df, rm('FLTS TOTAL', 'FLTS NOT HIT', 'FLTS HIT'))
+# # Read flight data
+# flt.data  <- readRDS("KDEN flights.rds")
+# 
+# # Join flights with model dataset
+# df <- left_join(strikes, flt.data,by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE", "RTIME" = "RTIME"))
+# 
+# # Filter dataset for all data after 1995
+# df <- df %>% filter(df$DATE > '1995-01-01')
+# 
+# # When strikes = 0 get all the complete cases and then merge that with the data which has strikes
+# temp <- df %>% filter(df$STRIKE == 0) %>% filter_at(vars(8:17), all_vars(complete.cases(.)))
+# 
+# with.strikes <- df %>% filter(df$STRIKE == 1)
+# 
+# df <- rbind(temp, with.strikes)
+# 
+# # overwrite df by removing all the columns which are uneccessary
+# df <- within(df, rm('FLTS TOTAL', 'FLTS NOT HIT', 'FLTS HIT'))
 
 ```
 
