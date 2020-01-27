@@ -9,7 +9,7 @@ output:
   theme: united
 ---
   
-  ```{r setup, include=FALSE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
 ```
 
@@ -17,25 +17,29 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
 
 # Creating a vector of packages used within
 packages <- c('tidyverse',
-              'data.table',
-              'scales',
-              'magrittr',
-              'tidyselect',
-              'lubridate',
-              'zoo',
-              'VIM',
-              'Rtsne',
-              'MASS',
-              'leaps',
               'car',
               'caret',
-              'randomForest',
+              'caTools',
+              'data.table',
+              'DMwR',
+              'e1071',
+              'klaR',
+              #'lares', this package should be installed from github
+              'leaps',
+              'lubridate',
+              'magrittr',
+              'MASS',
+              'MLeval',
               'PerformanceAnalytics',
               'pROC',
-              'e1071',
-              'DMwR',
-              'caTools',
-              'ROCR'
+              'randomForest',
+              'ROCR',
+              'Rtsne',
+              'scales',
+              'tidyselect',
+              'tidyverse',
+              'VIM',
+              'zoo'
               )
 
 # Checking for package installations on the system and installing if not found
@@ -47,7 +51,7 @@ if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
 for(package in packages){
   library(package, character.only = TRUE)
 }
-library(ROCR)
+library(ROCR, lares)
 
 ```
 
@@ -107,7 +111,7 @@ model.data.day$STRIKE <- as.factor(model.data.day$STRIKE)
 
 #verifying if there are any NAs
 NAs <-is.na.data.frame(model.data.day)
-cotable(NAs)
+table(NAs)
 ```
 
 ```{r}
@@ -120,7 +124,6 @@ balanced.data.day<-
     k = 10,
     perc.under = 500
   )
-
 
 ```
 

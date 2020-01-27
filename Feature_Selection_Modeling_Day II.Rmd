@@ -1,0 +1,447 @@
+---
+title: "Count Model Workings"
+author: "Tanu Kajla"
+date: "January 25, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c('tidyverse',
+              'car',
+              'caret',
+              'caTools',
+              'data.table',
+              'DMwR',
+              'e1071',
+              'klaR',
+              #'lares', this package should be installed from github
+              'leaps',
+              'lubridate',
+              'magrittr',
+              'MASS',
+              'MLeval',
+              'PerformanceAnalytics',
+              'pROC',
+              'randomForest',
+              'ROCR',
+              'Rtsne',
+              'scales',
+              'tidyselect',
+              'tidyverse',
+              'VIM',
+              'zoo',
+              'arm'
+              )
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+library("ROCR", "lares", "caret", "countreg","Information")
+require(pscl)
+require(MASS)
+require(boot)
+#install.packages("countreg", repos="http://R-Forge.R-project.org")
+
+
+```
+
+```{r}
+# Read dataset from RDS
+model.data <- readRDS("KDEN_FINAL.RDS")
+
+#Running the Code to Group the Data by Day. THis removes Rtime, Arrivals, Departures
+model.data.day <- model.data %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`TOTAL` = sum(`TOTAL`), 
+            STRIKES = sum(STRIKE), #Sum of Strikes
+            STRIKE = sum(STRIKE), #Will be COnverted to Binary Strikes
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), 
+            SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), 
+            `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            `COVER`= mean(`COVER`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), 
+            COVERH = mean(COVERH, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T),
+            VIS = mean(VIS, na.rm=T)) %>% 
+    mutate(STRIKE = ifelse(STRIKE>0,1,0))
+
+#Converting the new day data into a data frame 
+model.data.day<-as.data.frame(model.data.day)
+model.data.day$STRIKE<-as.factor(model.data.day$STRIKE)
+
+# Add Year, Month, Day and Weekday fields to  the dataset as factors
+date.add <- data.frame(
+  YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
+  MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
+  DAY = as.factor(format(model.data.day$DATE, format = "%d")),
+  WEEKOFDAY = as.factor(format(model.data.day$DATE, format = "%V"))
+)
+
+# Bind new cols to the original dataset
+model.data.day <- cbind(model.data.day, date.add)
+
+# Remove AirportId and Date columns
+model.data.day <- model.data.day[,-c(1,2)]
+
+# Rename Windangle and windspeed
+model.data.day <-
+  model.data.day %>% dplyr::rename(WANGLE = `WIND ANGLE`,
+                               WSPEED = `WIND SPEED`)
+
+# Because of memory constraints considering only 2 years data
+model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2017,2018))
+
+```
+
+
+```{r }
+# Create the training and test datasets
+set.seed(500)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers <-
+  createDataPartition(model.data.day$STRIKE, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- model.data.day[trainRowNumbers, ]
+
+# Step 3: Create the test dataset
+test.data <- model.data.day[-trainRowNumbers, ]
+
+```
+
+```{r Regression Model}
+#Model 1: Run a Regular Stepwise Linar Regression on the Entire DataSet 
+glmStepAIC <- train(STRIKES ~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+VIS,
+                  data = model.data.day, 
+                  method="glmStepAIC")
+summary(glmStepAIC)
+
+#List of Class
+classlist<-lapply(model.data.day,class)
+print(classlist)
+
+#Altnerate modelbase
+#modelbase<-glm(STRIKES~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS+ WEEKOFDAY, data = model.data.day)
+#alternate feature selection 
+#step <- stepAIC(modelbase)
+#step$anova # display results
+
+```
+
+
+```{r Negative Binomial}
+#Running Modelson training data 
+
+#Vew
+# classlist<-lapply(model.data.day,class)
+# print(classlist)
+
+
+# define training control
+#train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+train_control <- trainControl(method="cv", number=5)
+
+# Step:  AIC=329.67
+# .outcome ~ STRIKE + TEMP + WANGLE + WSPEED + COVER + CLOUDH + 
+#     PRECIP
+
+#Negative Binomial (Carot)---- -DOESN"T WORK
+library(MASS)
+
+# modelglm.nbc <- train(STRIKES~
+#                         # TOTAL+
+#                         STRIKE+
+#                         BIRDCOUNT+
+#                         TEMP+
+#                         # SLP+
+#                         WANGLE+
+#                         WSPEED+
+#                         COVER+
+#                         CLOUDH+
+#                         # COVERH+
+#                         PRECIP+
+#                         VIS+
+#                         MONTH+
+#                         # DAY+
+#                         WEEKOFDAY,
+#                   data=train.data,
+#                   method="glm.nb" ,
+#                   link = "identity",
+#                   trControl = train_control)
+# summary(modelglm.nbc)
+# modelglm.nbc$finalModel
+
+
+#Negative Binomial
+modelglm.nb <- glm.nb(STRIKES~
+                        TOTAL+ 
+                        STRIKE+ 
+                        BIRDCOUNT+ 
+                        TEMP+ 
+                        SLP+ 
+                        WANGLE+ 
+                        WSPEED+ 
+                        COVER+ 
+                        CLOUDH+ 
+                        COVERH+ 
+                        PRECIP+ 
+                        VIS+
+                        MONTH+
+                        DAY+
+                        WEEKOFDAY,
+                  data=train.data, link = "log")
+summary(modelglm)
+
+modelglm$finalModel
+
+predictions<-predict(modelglm,test.data)
+#Create a comparison table of the actual test data and the prediction 
+compare<- test.data%>% 
+  dplyr::select("YEAR","MONTH","DAY","STRIKES")
+#combine the predictions 
+compare<-cbind(compare,predictions)
+#create the accuracy binary output
+compare$accuracy<- ifelse(compare$STRIKE == compare$predictions,TRUE,FALSE)
+#summary of the accuracy 
+table(compare$STRIKES)
+View(compare)
+table(compare$accuracy)
+#Filter only predicted strikes that were TRUE... only 3 accurate predictions
+acc<- filter(compare, accuracy == TRUE, predictions != 0) 
+false<- filter(compare, accuracy == FALSE) 
+
+
+#ALL Of the false metrics were actual strikes occuring 
+View(acc)
+View(false)
+
+
+###NOT A GOOD MODEL NEEDS TO BE TUNED 
+
+```
+
+
+```{r }
+#Resample for the Poisson & QP
+resple <- createResample(train.data,times = 10)
+train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
+
+##Poisson
+modelPos <- train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP, family = poisson(link = "log"))
+ summary(modelPos)
+##QuasiPosson
+modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
+                family = quasipoisson(link = "log"))
+  summary(modelQPos)
+
+```
+
+
+
+```{r}
+# train the models
+##General Linear Model 
+modelglm <- train(STRIKE~TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS,
+                  data=train.data, trControl=train_control, method="glm")
+  summary(modelglm)
+
+Pmodel <- train(STRIKE~., data = train.data, method = "glm", trControl = train_control,family = poisson(link = "log"))
+QPmodel <-train(STRIKE~., data = train.data, method = "glm", trControl = myCtrl,family = quasipoisson(link = "log"))
+summary(Pmodel)
+  
+#Resample for the Poisson & QP
+resple <- createResample(train.data,times = 10)
+train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
+
+##Poisson
+modelPos <- train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP, family = poisson(link = "log"))
+ summary(modelPos)
+##QuasiPosson
+modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
+                family = quasipoisson(link = "log"))
+  summary(modelQPos)
+
+  
+```
+
+```{Feature Selection}
+#Feature Selection on what is relvant 
+#step <- stepAIC(model1)
+#step$anova # display results
+#plot(model1, cex.axis = 0.8, las = 1)
+
+```
+
+
+```{r Information Gain Code}
+
+strikes.cat <-model.data.day[, c("MONTH","WEEKOFDAY","STRIKE")]
+
+
+### Ranking variables using penalized IV
+info.val.data <-
+  Information::create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
+
+info.val = data.frame(info.val.data$Summary)
+info.val.data$Summary
+
+```
+
+
+```{r Negative Binomial}
+folds <- createFolds(factor(train.data$STRIKE), k = 10, list = FALSE)
+
+
+# m1 <- pscl::zeroinfl(STRIKE ~ WANGLE + WSPEED + TEMP + CLOUDH + COVER + PRECIP+
+#                 BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY ,
+#               data = train.data, dist = "negbin" )
+```
+
+```{r}
+#http://www.strengejacke.de/sjPlot/reference/sjp.kfold_cv.html
+# install.packages("sjmisc")
+# library(sjmisc)
+# devtools::install_github("sjPlot/devel")
+# devtools::install_github("sjPlot/sjmisc")
+# 
+# sjp.kfold_cv(train.data, fit = model1)
+# 
+# kfoldcv(10,91)
+# 
+# sjmisc::
+```
+```{r}
+#Create 10 Cross-Validation folds
+library(caret)
+tmp <- createResample(train.data,times = 5)
+myCtrl <- trainControl(method = "cv", index = tmp, timingSamps = 5)
+control <- trainControl(method = "cv", number = 2)
+
+# train the model
+
+
+```
+
+
+```{r}
+#Generating the Predictions on the test data
+predictions<-predict(modelglmStepALC,test.data)
+
+```
+
+
+```{r}
+#Compares the overall count and rest data 
+# table(predictions)
+# table(test.data$STRIKE)
+# View(test.data)
+
+#Create a comparison table of the actual test data and the prediction 
+compare<- test.data%>% 
+  dplyr::select("YEAR","MONTH","DAY","STRIKE")
+#combine the predictions 
+compare<-cbind(compare,predictions)
+#create the accuracy binary output
+compare$accuracy<- ifelse(compare$STRIKE == compare$predictions,TRUE,FALSE)
+#summary of the accuracy 
+table(compare$accuracy)
+#Filter only predicted strikes that were TRUE... only 3 accurate predictions
+acc<- filter(compare, accuracy == TRUE, predictions != 0) 
+View(acc)
+
+```
+
+
+```{r}
+
+#knn
+fit<-caret::train(STRIKE~ .,
+               data = train.data,
+               method = "knn")
+fit
+
+tc <- trainControl(
+  method = "knn",
+  number = 5,
+  savePredictions = "final"
+)
+
+#kfolds <- createFolds(factor(train.data$STRIKE), k = 3, list = FALSE)
+# caret::train(STRIKE~ .,
+#                data = train.data,
+#                method = "knn",
+#              resample = kfolds)
+
+# define training control
+
+
+```
+
+
+```{r}
+m <-glmer.nb(STRIKES ~ `FLTS TOTAL` +  (1|MONTH), data = d_day)
+
+m <-glm.nb(STRIKES ~`FLTS TOTAL` + VIS + TEMP + COVERH + CLOUDH + SLP + BIRDCOUNT +
+             `WIND SPEED` + `WIND ANGLE` + as.factor(WEEK), data = d_day_hour)
+
+m_count_day_notime <- hurdle(STRIKES ~ SLP + BIRDCOUNT + `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                              CLOUDH + COVERH + VIS, 
+                               data = d_day, dist="negbin")
+m_count_day_notime <- glm.nb(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS, 
+                               data = d_day)
+summary(m_count_day_notime)
+#### Seems that models very sensitive to scale of variables ...
+#### When using hurdle/zeroinfl with "negbin", it seems that theta goes very large, which would indicate that poisson model can be used (as it woudl approximate it) -> same above
+# m_count_day_mfactor <- hurdle(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+#                                  SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + MONTH,
+#                                data = dddd, dist="poisson")
+
+# m_count_day_mfactor <- glmer.nb(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+#                                  SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + (1|MONTH),
+#                                data = dddd)
+
+### Even after scaling .. still large theta
+ds_day <- fastScale(d_day)
+ds_day$STRIKES <- d_day$STRIKES
+m_count_day_wfactor <- glm(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + WEEK, family= "poisson",
+                               data = ds_day)
+m_count_day_wfactor <- glm.nb(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + WEEK,
+                               data = ds_day)
+summary(m_count_day_wfactor)
+        
+### Theta smaller, so Nb probably better       
+m_count_day_mfactor <- glm(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + MONTH, 
+                               data = ds_day, family="poisson")
+m_count_day_mfactor <- glm.nb(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + MONTH, 
+                               data = ds_day)
+m_count_day_mfactor <- glmer.nb(STRIKES ~ `FLTS TOTAL` + `WIND SPEED` + `WIND ANGLE` + TEMP + 
+                                 SLP + BIRDCOUNT + CLOUDH + COVERH + VIS + 
+                                  (1+ VIS|MONTH) , 
+                               data = ds_day)
+
+
+summary(m_count_day_mfactor)
+
+
+
+```
+
