@@ -11,32 +11,35 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
 # Creating a vector of packages used within
-packages <- c('tidyverse',
-              'car',
-              'caret',
-              'caTools',
-              'data.table',
-              'DMwR',
-              'e1071',
-              'klaR',
-              #'lares', this package should be installed from github
-              'leaps',
-              'lubridate',
-              'magrittr',
-              'MASS',
-              'MLeval',
-              'PerformanceAnalytics',
-              'pROC',
-              'randomForest',
-              'ROCR',
-              'Rtsne',
-              'scales',
-              'tidyselect',
-              'tidyverse',
-              'VIM',
-              'zoo',
-              'arm'
-              )
+packages <- c('arm',
+'car',
+'caret',
+'caTools',
+'data.table',
+'DMwR',
+'e1071',
+'klaR',
+'leaps',
+'lubridate',
+'magrittr',
+'MASS',
+'MLeval',
+'PerformanceAnalytics',
+'pROC',
+'randomForest',
+'ROCR',
+'Rtsne',
+'scales',
+'tidyselect',
+'tidyverse',
+'VIM',
+'zoo',
+'Boruta',
+'lares',
+'mlbench',
+'proxy',
+'splitstackshape',
+'varrank')
 
 # Checking for package installations on the system and installing if not found
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
@@ -47,7 +50,7 @@ if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
 for(package in packages){
   library(package, character.only = TRUE)
 }
-library("ROCR", "lares", "caret","Information")
+library("ROCR", "lares", "caret","Information","genBart","limma")
 require(pscl)
 require(MASS)
 require(boot)
@@ -56,7 +59,10 @@ require(boot)
 
 ```
 
-```{r}
+
+```{r Model Data by Day}
+
+########### Data Pre-Processing  ###########
 # Read dataset from RDS
 model.data <- readRDS("KDEN_FINAL.RDS")
 
@@ -65,7 +71,7 @@ model.data.day <- model.data %>%
   group_by(`AIRPORT ID`,DATE) %>%
   summarise(`TOTAL` = sum(`TOTAL`), 
             STRIKES = sum(STRIKE), #Sum of Strikes
-            STRIKE = sum(STRIKE), #Will be COnverted to Binary Strikes
+            STRIKE = sum(STRIKE), #Will be Converted to Binary Strikes
             BIRDCOUNT = first(BIRDCOUNT),
             TEMP = mean(TEMP,na.rm=TRUE), 
             SLP = mean(SLP, na.rm=TRUE),
@@ -102,12 +108,9 @@ model.data.day <-
                                WSPEED = `WIND SPEED`)
 
 # Because of memory constraints considering only 2 years data
-model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2014,2018))
+model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2014,2015,2016,2017,2018))
 
-```
-
-
-```{r }
+########### Create the Training and Test Data Set Data Sets ###########
 # Create the training and test datasets
 set.seed(500)
 
@@ -123,16 +126,130 @@ test.data <- model.data.day[-trainRowNumbers, ]
 
 ```
 
-```{r Regression Model}
-#Model 1: Run a Regular Stepwise Linar Regression on the Entire DataSet 
-glmStepAIC <- train(STRIKES ~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+VIS,
-                  data = model.data.day, 
-                  method="glmStepAIC")
-summary(glmStepAIC)
 
-#List of Class
-classlist<-lapply(model.data.day,class)
-print(classlist)
+```{r Functions & Parameters}
+########### Functions ###########
+validateAndPrintResultC <- function(model, test.data) {
+  # Summarise Results
+  print(model)
+  summary(model)
+  model$finalModel
+
+  # Predict on testData
+  predicted.resp <- round(predict(model, test.data))
+  
+  # head(predicted.resp)
+  compare<- test.data%>% 
+  dplyr::select("YEAR","MONTH","DAY","STRIKES")
+  
+  compare<-cbind(compare,predicted.resp)
+  compare$accuracy<- ifelse(compare$STRIKES == compare$predicted.resp,TRUE,FALSE)
+  print(table(compare$accuracy))
+  acc<- filter(compare, accuracy == TRUE, predicted.resp != 0) 
+  false<- filter(compare, accuracy == FALSE)
+  print(acc)
+  print(false)
+
+}
+
+########### Parameters ###########
+#train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+train_control <- trainControl(method="cv", number=5)
+#link ="log"
+
+#total variables
+regression<-STRIKES~
+  TOTAL+
+  STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  SLP+
+  WANGLE+
+  WSPEED+
+  COVER+
+  CLOUDH+
+  COVERH+
+  PRECIP+
+  VIS+
+  MONTH+
+  DAY+
+  WEEKOFDAY
+
+#selected variables
+regression1<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  #SLP+
+  WANGLE+
+  WSPEED+
+  #COVER+
+  CLOUDH+
+  COVERH+
+  #PRECIP+
+  VIS+
+  #YEAR+
+  MONTH+
+  DAY+
+  WEEKOFDAY
+
+```
+
+```{r}
+corr.data <-
+  model.data.day %>% dplyr::select(STRIKES,
+                               WANGLE,
+                               WSPEED,
+                               TEMP,
+                               CLOUDH,
+                               COVER,
+                               COVERH,
+                               BIRDCOUNT,
+                               TOTAL,
+                               SLP,
+                               VIS,
+                               PRECIP)
+corplot::corrplot(corr.data)
+
+
+install.packages("corrplot")
+source("http://www.sthda.com/upload/rquery_cormat.r")
+cormat<-rquery.cormat(corr.data, graphType="heatmap")
+item<-rquery.cormat(corr.data, type="flatten", graph=FALSE)
+rquery.cormat(corr.data, type="full")
+corr<-item$r
+View(corr)
+```
+
+
+```{r Stepwise Feature Selection Model}
+########### Stepwise Feature Selection (fully fitted)
+#Run a Regular Stepwise Linar Regression on the Entire DataSet --- TAKES A LONG TIME WITH TIME VARIABLES
+glmStepAIC <- train(regression,
+                    data = model.data.day,
+                    method="glmStepAIC",
+                    trControl = train_control)
+#Print the Results.. This is totally overfitted because it was run on the entire data set to get feature selection 
+validateAndPrintResultC(glmStepAIC,test.data)
+sink(type = "output")
+
+########### RANDOM AIC RESULTS ########### 
+
+# 729 samples
+#  12 predictor
+# 
+# No pre-processing
+# Resampling: Cross-Validated (5 fold) 
+# Summary of sample sizes: 584, 583, 583, 583, 583 
+# Resampling results:
+# 
+#   RMSE       Rsquared   MAE      
+#   0.3121226  0.7730515  0.1370295
+# 
+# 
+# FALSE  TRUE 
+#    10   135 
 
 #Altnerate modelbase
 #modelbase<-glm(STRIKES~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS+ WEEKOFDAY, data = model.data.day)
@@ -140,288 +257,241 @@ print(classlist)
 #step <- stepAIC(modelbase)
 #step$anova # display results
 
-```
-
-
-```{r Negative Binomial}
-#Running Modelson training data 
-
 # define training control
-train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
-#train_control <- trainControl(method="cv", number=5)
 
 # Step:  AIC=329.67
 # .outcome ~ STRIKE + TEMP + WANGLE + WSPEED + COVER + CLOUDH + 
 #     PRECIP
 
-#glm (Carot)----
-library(MASS)
-modelglm <- train(STRIKES~
-                        # TOTAL+
-                        STRIKE+
-                        BIRDCOUNT+
-                        TEMP+
-                        # SLP+
-                        WANGLE+
-                        WSPEED+
-                        COVER+
-                        CLOUDH+
-                        # COVERH+
-                        PRECIP+
-                        VIS+
-                        MONTH+
-                        # DAY+
-                        WEEKOFDAY,
-                  data=train.data,
-                  method="glm" ,
-                  trControl = train_control)
-summary(modelglm)
-modelglm$finalModel
-
-predictions<-round(predict(modelglm,test.data, type = "raw"))
-#Create a comparison table of the actual test data and the prediction 
-compare<- test.data%>% 
-  dplyr::select("YEAR","MONTH","DAY","STRIKES")
-#combine the predictions 
-compare<-cbind(compare,predictions)
-#create the accuracy binary output
-compare$accuracy<- ifelse(compare$STRIKES == compare$predictions,TRUE,FALSE)
-#summary of the accuracy 
-table(compare$accuracy)
-#Filter only predicted strikes that were TRUE... only 3 accurate predictions
-acc<- filter(compare, accuracy == TRUE, predictions != 0) 
-false<- filter(compare, accuracy == FALSE) 
+# Step:  AIC=377.81
+# .outcome ~ STRIKE1 + TEMP + WANGLE + COVER + VIS
+# 
+#           Df Deviance     AIC
+# <none>         70.306  377.81
+# - VIS      1   70.568  378.53
+# - COVER    1   70.606  378.92
+# - WANGLE   1   70.650  379.37
+# - TEMP     1   70.668  379.56
+# - STRIKE1  1  291.892 1413.57
+# Generalized Linear Model with Stepwise Feature Selection 
 
 
-#ALL Of the false metrics were actual strikes occuring 
-View(acc) #Predicted 24 accurate strikes for data between 2017 and 2018...... 27 accurate strikes since data from 2014
-View(false) 
+# Step:  AIC=377.81
+# .outcome ~ STRIKE1 + TEMP + WANGLE + COVER + VIS
+# 
+#           Df Deviance     AIC
+# <none>         70.306  377.81
+# - VIS      1   70.568  378.53
+# - COVER    1   70.606  378.92
+# - WANGLE   1   70.650  379.37
+# - TEMP     1   70.668  379.56
+# - STRIKE1  1  291.892 1413.57
+# Generalized Linear Model with Stepwise Feature Selection 
 
-##BEST PREDICTED MODEL!
-```
+#After runing all the variables
 
+# Step:  AIC=1361.23
+# .outcome ~ WSPEED + VIS + MONTH08 + MONTH09 + MONTH10 + DAY03 + 
+#     DAY07 + DAY29 + WEEKOFDAY19 + WEEKOFDAY20 + WEEKOFDAY21 + 
+#     WEEKOFDAY22 + WEEKOFDAY23 + WEEKOFDAY24 + WEEKOFDAY25 + WEEKOFDAY26 + 
+#     WEEKOFDAY27 + WEEKOFDAY29 + WEEKOFDAY30 + WEEKOFDAY31 + WEEKOFDAY32 + 
+#     WEEKOFDAY33 + WEEKOFDAY34 + WEEKOFDAY35 + WEEKOFDAY37 + WEEKOFDAY40
 
-```{r}
-#Negative Binomial
-modelglm.nb <- glm.nb(STRIKES~
-                        TOTAL+ 
-                        STRIKE+ 
-                        BIRDCOUNT+ 
-                        TEMP+ 
-                        SLP+ 
-                        WANGLE+ 
-                        WSPEED+ 
-                        COVER+ 
-                        CLOUDH+ 
-                        COVERH+ 
-                        PRECIP+ 
-                        VIS+
-                        MONTH+
-                        DAY+
-                        WEEKOFDAY,
-                  data=train.data, link = "log")
-summary(modelglm.nb)
-modelglm.nb$finalModel
-
-```
-
-
-```{r }
-#Resample for the Poisson & QP
-#resple <- createResample(train.data,times = 10)
-#train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
-
-##Poisson
-modelPos <- lm(STRIKES~
-                        TOTAL+ 
-                        #STRIKE+ 
-                        BIRDCOUNT+ 
-                        TEMP+ 
-                        SLP+ 
-                        WANGLE+ 
-                        WSPEED+ 
-                        COVER+ 
-                        CLOUDH+ 
-                        COVERH+ 
-                        PRECIP+ 
-                        VIS+
-                        MONTH+
-                        DAY+
-                        WEEKOFDAY, 
-               data = train.data, family="poisson")
-
-predictionsp<-round(predict(modelPos,test.data))
-#Create a comparison table of the actual test data and the prediction 
-comparep<- test.data%>% 
-  dplyr::select("YEAR","MONTH","DAY","STRIKES")
-#combine the predictions 
-comparep<-cbind(comparep,predictionsp)
-#create the accuracy binary output
-comparep$accuracy<- ifelse(comparep$STRIKES == comparep$predictionsp,TRUE,FALSE)
-#summary of the accuracy 
-View(comparep)
-table(comparep$accuracy)
-#Filter only predicted strikes that were TRUE... only 3 accurate predictions
-accp<- filter(comparep, accuracy == TRUE, predictions != 0) 
-falsep<- filter(comparep, accuracy == FALSE) 
-
-#ALL Of the false metrics were actual strikes occuring 
-View(acc)
-View(falsep)
-
-```
-
-```{r}
-##QuasiPosson
-modelQPos<-lm(STRIKES~
-                        TOTAL+ 
-                        #STRIKE+ 
-                        BIRDCOUNT+ 
-                        TEMP+ 
-                        SLP+ 
-                        WANGLE+ 
-                        WSPEED+ 
-                        COVER+ 
-                        CLOUDH+ 
-                        COVERH+ 
-                        PRECIP+ 
-                        VIS+
-                        MONTH+
-                        DAY+
-                        WEEKOFDAY, 
-               data = train.data, 
-                family = quasipoisson(link = "sqrt"))
-summary(modelQPos)
-
-predictionsqp<-round(predict(modelQPos,test.data))
-#Create a comparison table of the actual test data and the prediction 
-compareqp<- test.data%>% 
-  dplyr::select("YEAR","MONTH","DAY","STRIKES", "STRIKE")
-#combine the predictions 
-compareqp<-cbind(compareqp,predictionsqp)
-#create the accuracy binary output
-compareqp$accuracy<- ifelse(compareqp$STRIKE == compareqp$predictionsqp,TRUE,FALSE)
-#summary of the accuracy 
-View(compareqp)
-table(compareqp$accuracy)
-#Filter only predicted strikes that were TRUE... only 3 accurate predictions
-accqp<- filter(compareqp, accuracy == TRUE, predictions != 0) 
-falseqp<- filter(compareqp, accuracy == FALSE) 
-
-#ALL Of the false metrics were actual strikes occuring 
-View(accqp)
-View(falseqp)
-
-rm(accqp)
-```
-
-
-
-```{r}
-# train the models
-##General Linear Model 
-modelglm <- train(STRIKE~TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS,
-                  data=train.data, trControl=train_control, method="glm")
-  summary(modelglm)
-
-Pmodel <- train(STRIKE~., data = train.data, method = "glm", trControl = train_control,family = poisson(link = "log"))
-QPmodel <-train(STRIKE~., data = train.data, method = "glm", trControl = myCtrl,family = quasipoisson(link = "log"))
-summary(Pmodel)
-  
-#Resample for the Poisson & QP
-resple <- createResample(train.data,times = 10)
-train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
-
-##Poisson
-modelPos <- train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP, family = poisson(link = "log"))
- summary(modelPos)
-##QuasiPosson
-modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
-                family = quasipoisson(link = "log"))
-  summary(modelQPos)
-
-  
 ```
 
 ```{Feature Selection}
-#Feature Selection on what is relvant 
-#step <- stepAIC(model1)
-#step$anova # display results
-#plot(model1, cex.axis = 0.8, las = 1)
+# step <- stepAIC(model1)
+# step$anova # display results
+# plot(model1, cex.axis = 0.8, las = 1)
 
 ```
 
 
-```{r Information Gain Code}
+```{r Regression Model}
+########### General Model ########### 
+modelglm <- train(regression1,
+                  data=train.data,
+                  method="glm" ,
+                  trControl = train_control)
 
-strikes.cat <-model.data.day[, c("MONTH","WEEKOFDAY","STRIKE")]
+validateAndPrintResultC(modelglm,test.data)
+########### Results ########### 
 
+# 584 samples
+#  11 predictor
+# 
+# No pre-processing
+# Resampling: Cross-Validated (5 fold) 
+# Summary of sample sizes: 468, 468, 467, 467, 466 
+# Resampling results:
+# 
+#   RMSE       Rsquared    MAE      
+#   0.6766016  0.03640392  0.4935009
+# 
+# prediction from a rank-deficient fit may be misleading
+# FALSE  TRUE 
+#    54    91 
 
-### Ranking variables using penalized IV
-info.val.data <-
-  Information::create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
-
-info.val = data.frame(info.val.data$Summary)
-info.val.data$Summary
+# 8 Accurate predicted Flights
 
 ```
 
 
 ```{r Negative Binomial}
-folds <- createFolds(factor(train.data$STRIKE), k = 10, list = FALSE)
+#Negative Binomial
+modelglm.nb <- glm.nb(regression1,
+                  data=train.data, link = "sqrt")
+
+validateAndPrintResultC(modelglm.nb,test.data)
 
 
-# m1 <- pscl::zeroinfl(STRIKE ~ WANGLE + WSPEED + TEMP + CLOUDH + COVER + PRECIP+
-#                 BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY ,
-#               data = train.data, dist = "negbin" )
-```
+##Updating the link to sqrt
+# FALSE  TRUE 
+#   207   156 
+#countreg::rootogram(modelglm.nb)
 
-```{r}
-#http://www.strengejacke.de/sjPlot/reference/sjp.kfold_cv.html
-# install.packages("sjmisc")
-# library(sjmisc)
-# devtools::install_github("sjPlot/devel")
-# devtools::install_github("sjPlot/sjmisc")
+########### Results ########### 
+
+#The model is currently predicting negative strikes.. how do i control for this? 
+
+# Degrees of Freedom: 583 Total (i.e. Null);  483 Residual
+# Null Deviance:	    550.8 
+# Residual Deviance: 383.6 	AIC: 922.8
 # 
-# sjp.kfold_cv(train.data, fit = model1)
+# FALSE  TRUE 
+#   129    16 
+
+
+## want to try the NEGBINOMAIL with CAROT -- DOESN"T WORK
+# train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
 # 
-# kfoldcv(10,91)
+# modelglm.nb <- train(STRIKES~
+#                        TOTAL+
+#                         #STRIKE+
+#                         BIRDCOUNT+
+#                         TEMP+
+#                         #SLP+
+#                         WANGLE+
+#                         WSPEED+
+#                         #COVER+
+#                         CLOUDH+
+#                         COVERH+
+#                         #PRECIP+
+#                         VIS,
+#                         #YEAR+
+#                         #MONTH+
+#                         #DAY+
+#                         #WEEKOFDAY,
+#                   data=train.data,
+#                   method="glm.nb" ,
+#                   trControl = train_control,
+#                   link="sqrt")
+# validateAndPrintResultC(modelglm.nb,test.data)
+
+```
+
+
+```{r }
+##Poisson
+modelPos <- glm(regression1, 
+               data = train.data, family= poisson(link = "sqrt"))
+
+validateAndPrintResultC(modelPos,test.data)
+
+########### Results ########### 
+
+#Updating the link
+# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
+# Null Deviance:	    1464 
+# Residual Deviance: 1236 	AIC: 2300
 # 
-# sjmisc::
-```
-```{r}
-#Create 10 Cross-Validation folds
-library(caret)
-tmp <- createResample(train.data,times = 5)
-myCtrl <- trainControl(method = "cv", index = tmp, timingSamps = 5)
-control <- trainControl(method = "cv", number = 2)
-
-# train the model
+# FALSE  TRUE 
+#   208   155 
 
 
-```
 
+#The model is currently predicting negative strikes.. how do i control for this? 
 
-```{r}
-#Generating the Predictions on the test data
-predictions<-predict(modelglmStepALC,test.data)
+# Degrees of Freedom: 583 Total (i.e. Null);  483 Residual
+# Null Deviance:	    550.9 
+# Residual Deviance: 383.6 	AIC: 920.8
+# 
+# FALSE  TRUE 
+#   129    16 
 
 ```
 
-
 ```{r}
+##QuasiPosson
+modelQPos<-lm(regression1, 
+               data = train.data, 
+                family = quasipoisson(link = "sqrt"))
+validateAndPrintResultC(modelQPos,test.data)
 
-
-```
-
-
-```{r}
+#Looks Promising 
 
 ```
 
 
+```{r Information Gain}
+model.hurdle<- pscl::hurdle(regression3, data = train.data, dist = "poisson", zero.dist = "binomial")
+validateAndPrintResultC(model.hurdle,test.data)
+
+regression3<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  #BIRDCOUNT
+  #TEMP+
+  #SLP+
+  #WANGLE+
+  #WSPEED+
+  #COVER+
+  #CLOUDH+
+  #COVERH+
+  #PRECIP+
+  #VIS
+  #YEAR+
+  #MONTH+
+  #DAY+
+  #WEEKOFDAY
+
+#Cant run the hurdle since the variables are highly correlated with one another
+  
+```
+
+
 ```{r}
 
+
+```
+
+
+```{r}
+
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
 
 ```
 
