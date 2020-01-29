@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
 # Creating a vector of packages used within
-packages <- c('arm',
+packages <- c('arm','boot',
 'car',
 'caret',
 'caTools',
@@ -26,6 +26,7 @@ packages <- c('arm',
 'MLeval',
 'PerformanceAnalytics',
 'pROC',
+'pscl',
 'randomForest',
 'ROCR',
 'Rtsne',
@@ -35,11 +36,11 @@ packages <- c('arm',
 'VIM',
 'zoo',
 'Boruta',
-'lares',
 'mlbench',
 'proxy',
 'splitstackshape',
-'varrank')
+'varrank',
+'dplyr')
 
 # Checking for package installations on the system and installing if not found
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
@@ -50,12 +51,8 @@ if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
 for(package in packages){
   library(package, character.only = TRUE)
 }
-library("ROCR", "lares", "caret","Information","genBart","limma")
-require(pscl)
-require(MASS)
-require(boot)
-#install.packages("countreg", repos="http://R-Forge.R-project.org")
 
+#install.packages("countreg", repos="http://R-Forge.R-project.org")
 
 ```
 
@@ -93,7 +90,7 @@ date.add <- data.frame(
   YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
   MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
   DAY = as.factor(format(model.data.day$DATE, format = "%d")),
-  WEEKOFDAY = as.factor(format(model.data.day$DATE, format = "%V"))
+  WEEKOFYEAR = as.factor(format(model.data.day$DATE, format = "%V"))
 )
 
 # Bind new cols to the original dataset
@@ -144,23 +141,24 @@ validateAndPrintResultC <- function(model, test.data) {
   
   compare<-cbind(compare,predicted.resp)
   compare$accuracy<- ifelse(compare$STRIKES == compare$predicted.resp,TRUE,FALSE)
-  print(table(compare$accuracy))
   acc<- filter(compare, accuracy == TRUE, predicted.resp != 0) 
   false<- filter(compare, accuracy == FALSE)
+  print(table(compare$accuracy))
   print(acc)
   print(false)
 
 }
+source("http://www.sthda.com/upload/rquery_cormat.r")
 
 ########### Parameters ###########
 #train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
 train_control <- trainControl(method="cv", number=5)
-#link ="log"
 
+#all variables excluding the strikes factor (highly correlated, no value)
 #total variables
 regression<-STRIKES~
   TOTAL+
-  STRIKE+
+  #STRIKE+
   BIRDCOUNT+
   TEMP+
   SLP+
@@ -172,8 +170,8 @@ regression<-STRIKES~
   PRECIP+
   VIS+
   MONTH+
-  DAY+
-  WEEKOFDAY
+  #DAY+
+  WEEKOFYEAR
 
 #selected variables
 regression1<-STRIKES~
@@ -192,7 +190,25 @@ regression1<-STRIKES~
   #YEAR+
   MONTH+
   DAY+
-  WEEKOFDAY
+  WEEKOFYEAR
+
+#removal of time variables
+regression2<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  SLP+
+  WANGLE+
+  WSPEED+
+  COVER+
+  CLOUDH+
+  COVERH+
+  PRECIP+
+  VIS
+  #MONTH+
+  #DAY+
+  #WEEKOFYEAR
 
 ```
 
@@ -210,29 +226,23 @@ corr.data <-
                                SLP,
                                VIS,
                                PRECIP)
-corplot::corrplot(corr.data)
-
-
-install.packages("corrplot")
-source("http://www.sthda.com/upload/rquery_cormat.r")
+corr.list<-rquery.cormat(corr.data, type="flatten", graph=FALSE)
 cormat<-rquery.cormat(corr.data, graphType="heatmap")
-item<-rquery.cormat(corr.data, type="flatten", graph=FALSE)
 rquery.cormat(corr.data, type="full")
-corr<-item$r
-View(corr)
+corr<-corr.list$r
+
 ```
 
 
 ```{r Stepwise Feature Selection Model}
 ########### Stepwise Feature Selection (fully fitted)
 #Run a Regular Stepwise Linar Regression on the Entire DataSet --- TAKES A LONG TIME WITH TIME VARIABLES
-glmStepAIC <- train(regression,
+glmStepAIC <- train(regression2,
                     data = model.data.day,
                     method="glmStepAIC",
                     trControl = train_control)
 #Print the Results.. This is totally overfitted because it was run on the entire data set to get feature selection 
 validateAndPrintResultC(glmStepAIC,test.data)
-sink(type = "output")
 
 ########### RANDOM AIC RESULTS ########### 
 
@@ -252,7 +262,7 @@ sink(type = "output")
 #    10   135 
 
 #Altnerate modelbase
-#modelbase<-glm(STRIKES~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS+ WEEKOFDAY, data = model.data.day)
+#modelbase<-glm(STRIKES~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS+ WEEKOFYEAR, data = model.data.day)
 #alternate feature selection 
 #step <- stepAIC(modelbase)
 #step$anova # display results
@@ -275,37 +285,30 @@ sink(type = "output")
 # - STRIKE1  1  291.892 1413.57
 # Generalized Linear Model with Stepwise Feature Selection 
 
-
-# Step:  AIC=377.81
-# .outcome ~ STRIKE1 + TEMP + WANGLE + COVER + VIS
-# 
-#           Df Deviance     AIC
-# <none>         70.306  377.81
-# - VIS      1   70.568  378.53
-# - COVER    1   70.606  378.92
-# - WANGLE   1   70.650  379.37
-# - TEMP     1   70.668  379.56
-# - STRIKE1  1  291.892 1413.57
-# Generalized Linear Model with Stepwise Feature Selection 
-
 #After runing all the variables
 
 # Step:  AIC=1361.23
 # .outcome ~ WSPEED + VIS + MONTH08 + MONTH09 + MONTH10 + DAY03 + 
-#     DAY07 + DAY29 + WEEKOFDAY19 + WEEKOFDAY20 + WEEKOFDAY21 + 
-#     WEEKOFDAY22 + WEEKOFDAY23 + WEEKOFDAY24 + WEEKOFDAY25 + WEEKOFDAY26 + 
-#     WEEKOFDAY27 + WEEKOFDAY29 + WEEKOFDAY30 + WEEKOFDAY31 + WEEKOFDAY32 + 
-#     WEEKOFDAY33 + WEEKOFDAY34 + WEEKOFDAY35 + WEEKOFDAY37 + WEEKOFDAY40
+#     DAY07 + DAY29 + WEEKOFYEAR19 + WEEKOFYEAR20 + WEEKOFYEAR21 + 
+#     WEEKOFYEAR22 + WEEKOFYEAR23 + WEEKOFYEAR24 + WEEKOFYEAR25 + WEEKOFYEAR26 + 
+#     WEEKOFYEAR27 + WEEKOFYEAR29 + WEEKOFYEAR30 + WEEKOFYEAR31 + WEEKOFYEAR32 + 
+#     WEEKOFYEAR33 + WEEKOFYEAR34 + WEEKOFYEAR35 + WEEKOFYEAR37 + WEEKOFYEAR40
+
+#             Df Deviance    AIC
+# <none>           801.92 3691.3
+# - BIRDCOUNT  1   802.88 3691.5
+# - TOTAL      1   803.52 3693.0
+# - VIS        1   804.20 3694.5
+# - SLP        1   804.28 3694.7
+# - COVERH     1   806.00 3698.6
+# - TEMP       1   815.75 3720.5
+# Generalized Linear Model with Stepwise Feature Selection 
+# 
+# 1822 samples
+#   11 predictor
+
 
 ```
-
-```{Feature Selection}
-# step <- stepAIC(model1)
-# step$anova # display results
-# plot(model1, cex.axis = 0.8, las = 1)
-
-```
-
 
 ```{r Regression Model}
 ########### General Model ########### 
@@ -315,6 +318,9 @@ modelglm <- train(regression1,
                   trControl = train_control)
 
 validateAndPrintResultC(modelglm,test.data)
+
+plot(caret::varImp(modelglm))
+
 ########### Results ########### 
 
 # 584 samples
@@ -340,27 +346,21 @@ validateAndPrintResultC(modelglm,test.data)
 ```{r Negative Binomial}
 #Negative Binomial
 modelglm.nb <- glm.nb(regression1,
-                  data=train.data, link = "sqrt")
+                  data=train.data, link = "sqrt",
+                  method = "glm.fit")
 
 validateAndPrintResultC(modelglm.nb,test.data)
 
-
-##Updating the link to sqrt
-# FALSE  TRUE 
-#   207   156 
-#countreg::rootogram(modelglm.nb)
+plot(modelglm.nb)
 
 ########### Results ########### 
-
-#The model is currently predicting negative strikes.. how do i control for this? 
-
-# Degrees of Freedom: 583 Total (i.e. Null);  483 Residual
-# Null Deviance:	    550.8 
-# Residual Deviance: 383.6 	AIC: 922.8
+# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
+# Null Deviance:	    1318 
+# Residual Deviance: 1109 	AIC: 2295
 # 
 # FALSE  TRUE 
-#   129    16 
-
+#   207   156 
+########### Failed Code ########### 
 
 ## want to try the NEGBINOMAIL with CAROT -- DOESN"T WORK
 # train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
@@ -381,11 +381,13 @@ validateAndPrintResultC(modelglm.nb,test.data)
 #                         #YEAR+
 #                         #MONTH+
 #                         #DAY+
-#                         #WEEKOFDAY,
+#                         #WEEKOFYEAR,
 #                   data=train.data,
 #                   method="glm.nb" ,
-#                   trControl = train_control,
-#                   link="sqrt")
+#                   trControl = trainControl(method = "boot"),
+#                   link="sqrt",
+#                   trace =TRUE,
+#                   maxit = 10)
 # validateAndPrintResultC(modelglm.nb,test.data)
 
 ```
@@ -394,9 +396,12 @@ validateAndPrintResultC(modelglm.nb,test.data)
 ```{r }
 ##Poisson
 modelPos <- glm(regression1, 
-               data = train.data, family= poisson(link = "sqrt"))
+               data = train.data, 
+               family= poisson(link = "sqrt"))
 
 validateAndPrintResultC(modelPos,test.data)
+
+plot(modelPos)
 
 ########### Results ########### 
 
@@ -423,10 +428,13 @@ validateAndPrintResultC(modelPos,test.data)
 
 ```{r}
 ##QuasiPosson
-modelQPos<-lm(regression1, 
-               data = train.data, 
-                family = quasipoisson(link = "sqrt"))
+modelQPos<-glm(regression1, 
+              data = train.data, quasipoisson)
+              #family = quasipoisson(link = "sqrt"))
+              
 validateAndPrintResultC(modelQPos,test.data)
+
+plot(modelQPos)
 
 #Looks Promising 
 
@@ -453,25 +461,67 @@ regression3<-STRIKES~
   #YEAR+
   #MONTH+
   #DAY+
-  #WEEKOFDAY
+  #WEEKOFYEAR
 
 #Cant run the hurdle since the variables are highly correlated with one another
   
 ```
 
 
-```{r}
-
-
-```
-
-
-```{r}
-
+```{r ols}
+ols <-lm(regression1, data = train.data)
+validateAndPrintResultC(ols,test.data)
+plot(ols)
 
 ```
 
+
+```{r Fixed Effects-- DOESN't WORK}
+regression.time<-STRIKES~
+   TOTAL+
+  # #STRIKE+
+   BIRDCOUNT+
+  # TEMP+
+  # #SLP+
+  # WANGLE+
+   WSPEED+
+  # #COVER+
+  # CLOUDH+
+  # COVERH+
+  # #PRECIP+
+  # VIS+
+  #YEAR+
+  MONTH+
+  factor(DAY)+
+  factor(WEEKOFYEAR)
+
+fixed.dum <-lm(regression.time, data = train.data)
+validateAndPrintResultC(fixed.dum,test.data)
+
+summary(fixed.dum)
+plot(fixed.dum)
+fixed.time<- plm::plm(regression.time, 
+                      data = train.data, 
+                      model = "within")
+
+summary(fixed.time)
+random.time <- plm::plm(regression.time, 
+                  data=train.data, 
+                  model="random")
+# effect = c("individual",
+#   "time", "twoways", "nested")
+# model = c("within", "random", "ht",
+#   "between", "pooling", "fd")
+
+summary(fixed)
+#doesn't explain anything and has a very low r^2
+
+```
+
 ```{r}
+# To decide between fixed or random effects you can run a Hausman test where the null hypothesis is that the preferred model is random effects vs. the alternative the fixed effects (see Green, 2008, chapter 9). It basically tests whether the unique errors are correlated with the regressors, the null hypothesis is they are not. If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
+
+phtest(fixed, random)
 
 ```
 
