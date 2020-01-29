@@ -9,8 +9,13 @@ output:
   theme: united
 ---
   
-  ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  dpi = 100
+)
 ```
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
@@ -158,20 +163,20 @@ corr_cross(corr.data)
 ```{r}
 # Use Random Forest variable importance technique for variable selection
 # The below list has been tailored after multiple iterations
-fit <- randomForest::randomForest(
-  as.factor(STRIKE) ~ .,
-  data = strikes.data,
-  importance = TRUE,
-  proximity = FALSE,
-)
-importance(fit)
-
-varImp(fit)
-varImpPlot(fit, type = 2)
-importanceOrder = order(-fit$importance)
-
-names <- rownames(fit$importance)
-names
+# fit <- randomForest::randomForest(
+#   as.factor(STRIKE) ~ .,
+#   data = strikes.data,
+#   importance = TRUE,
+#   proximity = FALSE,
+# )
+# importance(fit)
+# 
+# varImp(fit)
+# varImpPlot(fit, type = 2)
+# importanceOrder = order(-fit$importance)
+# 
+# names <- rownames(fit$importance)
+# names
 ```
 
 ```{r}
@@ -193,32 +198,32 @@ names
 
 ```{r}
 
-var.boruta <-
-  Boruta(
-    as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + TOTAL + SLP + VIS + PRECIP + RTIME + MONTH + DAY + RTIME + WEEKOFDAY,
-    data = sample.data
-  )
-print(var.boruta)
-plot(var.boruta, cex.axis = 0.8, las = 1)
+# var.boruta <-
+#   Boruta(
+#     as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + TOTAL + SLP + VIS + PRECIP + RTIME + MONTH + DAY + RTIME + WEEKOFDAY,
+#     data = sample.data
+#   )
+# print(var.boruta)
+# plot(var.boruta, cex.axis = 0.8, las = 1)
 ```
 
 
 ```{r}
 
-# prepare training scheme
-control <- trainControl(method = "cv", number = 2)
-
-# train the model
-model <- train(STRIKE~., data = strikes.data, method = "lvq", preProcess = "scale", trControl = control)
-
-# estimate variable importance
-importance <- varImp(model, useModel = FALSE)
-
-# summarize importance
-print(importance)
-
-# plot importance
-plot(importance)
+# # prepare training scheme
+# control <- trainControl(method = "cv", number = 2)
+# 
+# # train the model
+# model <- train(STRIKE~., data = strikes.data, method = "lvq", preProcess = "scale", trControl = control)
+# 
+# # estimate variable importance
+# importance <- varImp(model, useModel = FALSE)
+# 
+# # summarize importance
+# print(importance)
+# 
+# # plot importance
+# plot(importance)
 ```
 
 ```{r}
@@ -257,12 +262,7 @@ strikes.sample <-
     "TEMP",
     "COVER",
     "BIRDCOUNT",
-    "TOTAL",
-    "SLP",
-    "VIS",
-    "PRECIP",
-    "CLOUDH",
-    "COVERH"
+    "TOTAL"
   )]
 
 strikes.sample$STRIKE <- as.numeric(strikes.sample$STRIKE)
@@ -299,13 +299,14 @@ nzv[nzv[,"zeroVar"] + nzv[,"nzv"] > 0, ] # Check for near-zero variance predicto
 # SMOTE oversampling for Classification 
 upsample.data <-
   SMOTE(
-    STRIKE ~  WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH,
+    STRIKE ~  WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
     strikes.data,
-    perc.over = 2000,
+    perc.over = 1600,
+    perc.under = 800,
     k = 10
   )
 
-upsample.data <- strikes.data %>% dplyr::select(STRIKE,
+upsample.data <- upsample.data %>% dplyr::select(STRIKE,
                                                  WSPEED,
                                                  TEMP,
                                                  BIRDCOUNT,
@@ -313,7 +314,8 @@ upsample.data <- strikes.data %>% dplyr::select(STRIKE,
                                                  COVER,
                                                  RTIME,
                                                  WEEKOFDAY,
-                                                 MONTH)
+                                                 MONTH,
+                                                 YEAR)
 
 upsample.data <- upsample.data %>%
   mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
@@ -328,21 +330,23 @@ describe(upsample.data)
 ```{r}
 downsample.data <-
   SMOTE(
-    STRIKE ~ WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH,
-    model.data,
-    perc.under = 2900,
+    STRIKE ~ WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
+    strikes.data,
+    perc.over = 800,
+    perc.under = 1600,
     k = 10
   )
 
-downsample.data <- strikes.data %>% dplyr::select(STRIKE,
-                                                 WSPEED,
-                                                 TEMP,
-                                                 BIRDCOUNT,
-                                                 TOTAL,
-                                                 COVER,
-                                                 RTIME,
-                                                 WEEKOFDAY,
-                                                 MONTH)
+downsample.data <- downsample.data %>% dplyr::select(STRIKE,
+                                                     WSPEED,
+                                                     TEMP,
+                                                     BIRDCOUNT,
+                                                     TOTAL,
+                                                     COVER,
+                                                     RTIME,
+                                                     WEEKOFDAY,
+                                                     MONTH,
+                                                     YEAR)
 
 downsample.data <- downsample.data %>%
   mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
@@ -359,7 +363,7 @@ set.seed(100)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers.up <-
-  createDataPartition(upsample.data$STRIKE, p = 0.8, list = FALSE)
+  createDataPartition(upsample.data$STRIKE, p = 0.75, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.up.data <- upsample.data[trainRowNumbers.up, ]
@@ -371,11 +375,11 @@ test.up.data <- upsample.data[-trainRowNumbers.up, ]
 
 ```{r}
 # Create the training and test datasets
-set.seed(1234)
+set.seed(100)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers.dn <-
-  createDataPartition(downsample.data$STRIKE, p = 0.8, list = FALSE)
+  createDataPartition(downsample.data$STRIKE, p = 0.75, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.dn.data <- downsample.data[trainRowNumbers.dn, ]
@@ -433,8 +437,7 @@ runModel <- function(train.data, method.name) {
                    "TOTAL",
                    "COVER",
                    "RTIME",
-                   "WEEKOFDAY",
-                   "MONTH")],
+                   "MONTH", "YEAR", "WEEKOFDAY")],
     train.data[, c("STRIKE")],
     data = train.data,
     tuneLength = 5,
@@ -480,20 +483,15 @@ model.dn.rf <- runModel(train.dn.data, "rf")
 validateAndPrintResult(model.dn.rf, test.dn.data)
 ```
 
-
-
-
 ```{r}
 # Compare model performances using resample()
 models_compare <-
   resamples(
     list(
       NB_UP = model.nb.up,
-      # NB_DN = model.nb.down,
-      RF_UP = model.up.rf
-      # RF_DOWN = model.dn.rf
-      # SVM_UP = model.up.svm,
-      # SVM_DN = model.dn.svm
+      NB_DN = model.nb.down,
+      RF_UP = model.up.rf,
+      RF_DOWN = model.dn.rf
     )
   )
 
@@ -508,23 +506,22 @@ scales <- list(x = list(relation = "free"),
 bwplot(models_compare, scales = 'free', layout = c(1,1))
 ```
 
-
 ```{r}
  
-model <-
+model.up.glm <-
   glm (
-    as.factor(STRIKE) ~  WSPEED + TEMP + COVER + TOTAL + RTIME + MONTH,
+    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
     data = train.up.data,
     family = binomial
   )
-summary(model)
+summary(model.up.glm)
 ```
 ```{r}
 ## Predict the Values
-predict <- predict(model, test.up.data, type = 'response')
+predict <- predict(model.up.glm, test.up.data, type = 'response')
 
 ## Create Confusion Matrix
-table(test.up.data$STRIKE, predict > 0.009)
+table(test.up.data$STRIKE, predict > 0.1)
 
 # ROC Curve
 ROCRpred <- prediction(predict, test.up.data$STRIKE)
@@ -537,8 +534,8 @@ ROCRperf
 # confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
 # 
 # predicted.response
-summary(model) # Summary of model
-cmLR <- table(predict>0.01, test.up.data$STRIKE)
+summary(model.up.glm) # Summary of model
+cmLR <- table(predict>0.1, test.up.data$STRIKE)
 cmLR # Confusion matrix
 errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
 errorLR # error rate
@@ -551,3 +548,48 @@ recallLR # recall
 FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
 FscoreLR # F-score
 ```
+
+```{r}
+model.dn.glm <-
+  glm (
+    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
+    data = train.dn.data,
+    family = binomial
+  )
+summary(model.dn.glm)
+
+```
+
+```{r}
+## Predict the Values
+predict <- predict(model.dn.glm, test.dn.data, type = 'response')
+
+## Create Confusion Matrix
+table(test.dn.data$STRIKE, predict > 0.1)
+
+# ROC Curve
+ROCRpred <- prediction(predict, test.dn.data$STRIKE)
+ROCRperf <- performance(ROCRpred, 'tpr','fpr')
+plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
+ROCRperf
+
+# # Predict using test data and generate confusion matrix
+# predicted.response <- predict(model, test.up.data, )
+# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
+# 
+# predicted.response
+summary(model.dn.glm) # Summary of model
+cmLR <- table(predict>0.1, test.dn.data$STRIKE)
+cmLR # Confusion matrix
+errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
+errorLR # error rate
+accuracyLR <- 100 - errorLR
+accuracyLR # accuracy rate
+precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
+precisionLR # precision
+recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
+recallLR # recall
+FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
+FscoreLR # F-score
+```
+
