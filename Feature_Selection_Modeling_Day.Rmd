@@ -1,5 +1,5 @@
 ---
-title: "FeatureSelection"
+title: "FeatureSelection & Modeling"
 author: "Team Strikes"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
@@ -10,241 +10,586 @@ output:
 ---
   
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi=100)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  dpi = 100
+)
 ```
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
 
 # Creating a vector of packages used within
-packages <- c('tidyverse',
-              'car',
-              'caret',
-              'caTools',
-              'data.table',
-              'DMwR',
-              'e1071',
-              'klaR',
-              #'lares', this package should be installed from github
-              'leaps',
-              'lubridate',
-              'magrittr',
-              'MASS',
-              'MLeval',
-              'PerformanceAnalytics',
-              'pROC',
-              'randomForest',
-              'ROCR',
-              'Rtsne',
-              'scales',
-              'tidyselect',
-              'tidyverse',
-              'VIM',
-              'zoo'
-              )
+packages <- c(
+  'tidyverse',
+  'data.table',
+  'scales',
+  'magrittr',
+  'tidyselect',
+  'lubridate',
+  'zoo',
+  'VIM',
+  'psych',
+  'MASS',
+  'varrank',
+  'proxy',
+  'caret',
+  'randomForest',
+  'mlbench',
+  'pROC',
+  'e1071',
+  'DMwR',
+  'caTools',
+  'ROCR',
+  'lares',
+  'klaR',
+  'MLeval',
+  'splitstackshape',
+  'Boruta',
+  'mctest',
+  'Information',
+  'pastecs'
+)
 
 # Checking for package installations on the system and installing if not found
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
-  install.packages(setdiff(packages, rownames(installed.packages())))  
+  install.packages(setdiff(packages, rownames(installed.packages())))
 }
 
 # Including the packages for use
-for(package in packages){
+for (package in packages) {
   library(package, character.only = TRUE)
 }
-library(ROCR, lares)
 
 ```
 
 ```{r}
 # Read dataset from RDS
 model.data <- readRDS("KDEN_FINAL.RDS")
-#names(model.data)
+
+head(model.data)
 ```
 
 ```{r}
+summary(model.data[3:12])
+```
 
-#Running the Code to Group the Data by Day. THis removes Rtime, Arrivals, Departures
-model.data.day <- model.data %>%
-  group_by(`AIRPORT ID`,DATE) %>%
-  summarise(`TOTAL` = sum(`TOTAL`), 
-            STRIKE = sum(STRIKE),
-            BIRDCOUNT = first(BIRDCOUNT),
-            TEMP = mean(TEMP,na.rm=TRUE), 
-            SLP = mean(SLP, na.rm=TRUE),
-            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), 
-            `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
-            `COVER`= mean(`COVER`,na.rm=TRUE),
-            CLOUDH = mean(CLOUDH, na.rm=T), 
-            COVERH = mean(COVERH, na.rm=T),
-            VIS = mean(VIS, na.rm=T)) %>%
-  mutate(STRIKE = ifelse(STRIKE>0,1,0),
-         WEEK = factor(isoweek(DATE), levels=1:53),
-         MONTH = factor(month(DATE), levels=1:12))
 
-#Converting the new day data into a data frame 
-model.data.day<-as.data.frame(model.data.day)
+```{r}
 
 # Add Year, Month, Day and Weekday fields to  the dataset as factors
-date.add <- data.frame(
-  YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
-  MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
-  DAY = as.factor(format(model.data.day$DATE, format = "%d")),
-  WEEKOFDAY = as.factor(format(model.data.day$DATE, format = "%V"))
-)
-
 # Bind new cols to the original dataset
-model.data.day <- cbind(model.data.day, date.add)
+  model.data <- cbind(
+    model.data,
+    data.frame(
+      YEAR = as.factor(format(model.data$DATE, format = "%Y")),
+      MONTH = as.factor(format(model.data$DATE, format = "%m")),
+      DAY = as.factor(format(model.data$DATE, format = "%d")),
+      WEEKOFDAY = as.factor(format(model.data$DATE, format = "%V"))
+    )
+  )
 
-# Remove AirportId and Date columns
-model.data.day <- model.data.day[,-c(1,2)]
+# Remove AirportId and Date columns -- to do put column names
+model.data <-
+  subset(model.data, select = -c(`AIRPORT ID`, DATE, ARRIVALS, DEPARTURES))
 
 # Rename Windangle and windspeed
-model.data.day <-
-  model.data.day %>% dplyr::rename(WANGLE = `WIND ANGLE`,
+model.data <-
+  model.data %>% dplyr::rename(WANGLE = `WIND ANGLE`,
                                WSPEED = `WIND SPEED`)
 
 # Because of memory constraints considering only 2 years data
-model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2017,2018))
+model.data <- model.data %>% filter(model.data$YEAR %in% c(2014,2015,2016,2017,2018))
 
 # Converting target as a factor
-model.data.day$STRIKE <- as.factor(model.data.day$STRIKE)
-
-#verifying if there are any NAs
-NAs <-is.na.data.frame(model.data.day)
-table(NAs)
+model.data$STRIKE <- as.factor(model.data$STRIKE)
 ```
 
 ```{r}
-# SMOTE oversampling for Classification 
-balanced.data.day<-
-  SMOTE(
-    STRIKE ~  RTIME + WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
-    model.data.day,
-    perc.over = 1000,
-    k = 10,
-    perc.under = 500
-  )
-
+# Run this on the original dataset
+# clusterKmeans(model.data, k=5, limit = 5, ohse = TRUE, norm = TRUE, seed = 1234)
 ```
 
+```{r}
 
-```{r Run Multivariate Regression for variable selection}
-# Target variable needs to be a numeric for running a regression
-# The below list has been modified after going through these stages and variable importance.
-# Originally provided all the variables and finally left with the below list
+years.list <- c(2014, 2015, 2016, 2017, 2018)
 
-# Initial Model:
-# as.numeric(STRIKE) ~ RTIME + WANGLE + WSPEED + TEMP + CLOUDH + 
-#     COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY
-# 
-# Final Model:
-# as.numeric(STRIKE) ~ RTIME + WSPEED + COVER + BIRDCOUNT + TOTAL + 
-#     MONTH
+for (year in years.list) {
+  set.seed(42)  # good idea to set the random seed for reproducibility
+  temp.data <- model.data %>% filter(model.data$YEAR == year)
+  temp.0.data <- temp.data %>% filter(temp.data$STRIKE == 0)
+  temp.1.data <- temp.data %>% filter(temp.data$STRIKE == 1)
+  sample.0.data <- stratified(temp.0.data, c('STRIKE'), 0.02)
+  sample.1.data <- stratified(temp.1.data, c('STRIKE'), 0.4)
+  sample.data <- rbind(sample.0.data, sample.1.data)
+  if (year == 2014) {
+    strikes.data <- sample.data
+  }
+  else{
+    strikes.data <- bind_rows(strikes.data, sample.data)
+  }
+}
 
-fit <-
-  lm(
-    as.numeric(STRIKE) ~ WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
-    data = balanced.data.day
-  )
-summary(fit)
-step <- stepAIC(fit)
-step$anova # display results
+rm(temp.0.data, temp.1.data, temp.data, sample.0.data, sample.1.data, sample.data)
 ```
 
 
 
 ```{r}
-# All Subsets Regression
-# Leaps doesnt run on balanced dataset. Too many linear dependencies confuse the package. 
-# attach(balanced.data)
-# leaps <-
-#   regsubsets(
-#     as.numeric(STRIKE) ~ RTIME + WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL + YEAR + MONTH + DAY + WEEKOFDAY,
-#     data = balanced.data, really.big = TRUE
-#   )
-# # view results
-# summary(leaps)
-# # plot a table of models showing variables in each model.
-# # models are ordered by the selection statistic.
-# plot(leaps, scale = "r2")
+corr.data <-
+  strikes.data %>% dplyr::select(STRIKE,
+                                    WANGLE,
+                                    WSPEED,
+                                    TEMP,
+                                    CLOUDH,
+                                    COVER,
+                                    COVERH,
+                                    BIRDCOUNT,
+                                    TOTAL,
+                                    SLP,
+                                    VIS,
+                                    PRECIP
+                                    # RTIME,
+                                    # MONTH,
+                                    # DAY
+                                    )
+
+corr_cross(corr.data)
 ```
+
+
 
 ```{r}
 # Use Random Forest variable importance technique for variable selection
 # The below list has been tailored after multiple iterations
-fit = randomForest::randomForest(
-  STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
-  data = balanced.data.day,
-  importance = TRUE,
-  proximity = TRUE)
-importance(fit)
+# fit <- randomForest::randomForest(
+#   as.factor(STRIKE) ~ .,
+#   data = strikes.data,
+#   importance = TRUE,
+#   proximity = FALSE,
+# )
+# importance(fit)
+# 
+# varImp(fit)
+# varImpPlot(fit, type = 2)
+# importanceOrder = order(-fit$importance)
+# 
+# names <- rownames(fit$importance)
+# names
+```
 
-varImp(fit)
-varImpPlot(fit, type = 2)
-importanceOrder = order(-fit$importance)
+```{r}
+# fit <- randomForest::randomForest(
+#   as.factor(STRIKE) ~ .,
+#   data = downsample.data,
+#   importance = TRUE,
+#   proximity = TRUE,
+# )
+# importance(fit)
+# 
+# varImp(fit)
+# varImpPlot(fit, type = 2)
+# importanceOrder = order(-fit$importance)
+# 
+# names <- rownames(fit$importance)
+# names
+```
 
-names = rownames(fit$importance)[importanceOrder][1:18]
-View(names)
+```{r}
+
+# var.boruta <-
+#   Boruta(
+#     as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + TOTAL + SLP + VIS + PRECIP + RTIME + MONTH + DAY + RTIME + WEEKOFDAY,
+#     data = sample.data
+#   )
+# print(var.boruta)
+# plot(var.boruta, cex.axis = 0.8, las = 1)
 ```
 
 
 ```{r}
 
-split <- sample.split(balanced.data.day$STRIKE, SplitRatio = 0.75)
-train <- subset(balanced.data.day, split == TRUE)
-test <- subset(balanced.data.day, split == FALSE)
+# # prepare training scheme
+# control <- trainControl(method = "cv", number = 2)
+# 
+# # train the model
+# model <- train(STRIKE~., data = strikes.data, method = "lvq", preProcess = "scale", trControl = control)
+# 
+# # estimate variable importance
+# importance <- varImp(model, useModel = FALSE)
+# 
+# # summarize importance
+# print(importance)
+# 
+# # plot importance
+# plot(importance)
+```
+
+```{r}
+# Helper function for VIF
+VIF <-
+  function(linear.model,
+           no.intercept = FALSE,
+           all.diagnostics = FALSE,
+           plot = FALSE) {
+    if (no.intercept == FALSE)
+      design.matrix <- model.matrix(linear.model)[, -1]
+    if (no.intercept == TRUE)
+      design.matrix <- model.matrix(linear.model)
+    if (plot == TRUE)
+      mc.plot(design.matrix, linear.model$model[1])
+    if (all.diagnostics == FALSE)
+      output <-
+        imcdiag(design.matrix,
+                linear.model$model[1],
+                method = 'VIF')$idiags[, 1]
+    if (all.diagnostics == TRUE)
+      output <-
+        imcdiag(design.matrix, linear.model$model[1])
+    output
+  }
+
+```
+
+```{r}
+set.seed(123)
+strikes.sample <-
+  strikes.data[, c(
+    "STRIKE",
+    "WANGLE",
+    "WSPEED",
+    "TEMP",
+    "COVER",
+    "BIRDCOUNT",
+    "TOTAL"
+  )]
+
+strikes.sample$STRIKE <- as.numeric(strikes.sample$STRIKE)
+
+# strikes.sample[, 2:12] <- scale(strikes.sample[, 2:12])
+
+fit <- glm(STRIKE ~ ., data = strikes.sample)
+VIF(fit, all.diagnostics = TRUE, plot = TRUE)
+
 ```
 
 
+```{r}
+
+# strikes.cat <-
+#   model.data[, c("RTIME", "MONTH", "WEEKOFDAY", "STRIKE")]
+# 
+# ### Ranking variables using penalized IV
+# info.val.data <-
+#   create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
+# 
+# info.val = data.frame(info.val.data$Summary)
+# info.val.data$Summary
+
+nzv <- nearZeroVar(strikes.data, saveMetrics = TRUE)
+nzv[nzv[,"zeroVar"] > 0, ] # Check for zero variance predictors. None
+nzv[nzv[,"zeroVar"] + nzv[,"nzv"] > 0, ] # Check for near-zero variance predictors
+
+```
+
+
+
+```{r}
+# SMOTE oversampling for Classification 
+upsample.data <-
+  SMOTE(
+    STRIKE ~  WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
+    strikes.data,
+    perc.over = 1600,
+    perc.under = 800,
+    k = 10
+  )
+
+upsample.data <- upsample.data %>% dplyr::select(STRIKE,
+                                                 WSPEED,
+                                                 TEMP,
+                                                 BIRDCOUNT,
+                                                 TOTAL,
+                                                 COVER,
+                                                 RTIME,
+                                                 WEEKOFDAY,
+                                                 MONTH,
+                                                 YEAR)
+
+upsample.data <- upsample.data %>%
+  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
+
+```
+
+```{r}
+describe(upsample.data)
+```
+
+
+```{r}
+downsample.data <-
+  SMOTE(
+    STRIKE ~ WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
+    strikes.data,
+    perc.over = 800,
+    perc.under = 1600,
+    k = 10
+  )
+
+downsample.data <- downsample.data %>% dplyr::select(STRIKE,
+                                                     WSPEED,
+                                                     TEMP,
+                                                     BIRDCOUNT,
+                                                     TOTAL,
+                                                     COVER,
+                                                     RTIME,
+                                                     WEEKOFDAY,
+                                                     MONTH,
+                                                     YEAR)
+
+downsample.data <- downsample.data %>%
+  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
+```
+
+```{r}
+describe(downsample.data)
+```
+
+
+```{r}
+# Create the training and test datasets
+set.seed(100)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.up <-
+  createDataPartition(upsample.data$STRIKE, p = 0.75, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.up.data <- upsample.data[trainRowNumbers.up, ]
+
+# Step 3: Create the test dataset
+test.up.data <- upsample.data[-trainRowNumbers.up, ]
+
+```
+
+```{r}
+# Create the training and test datasets
+set.seed(100)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.dn <-
+  createDataPartition(downsample.data$STRIKE, p = 0.75, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.dn.data <- downsample.data[trainRowNumbers.dn, ]
+
+# Step 3: Create the test dataset
+test.dn.data <- downsample.data[-trainRowNumbers.dn, ]
+
+```
+
+
+```{r}
+
+# 5 Fold cross validation with Probabilities
+tc <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = TRUE,
+  verboseIter = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+```{r}
+validateAndPrintResult <- function(model, test.data) {
+  # Summarise Results
+  print(model)
+  
+  ## run MLeval
+  res <- evalm(model)
+  
+  # Predict on testData
+  predicted.resp <- predict(model, test.data)
+  head(predicted.resp)
+  
+  # Compute the confusion matrix
+  confusionMatrix(
+    reference = as.factor(test.data$STRIKE),
+    data = predicted.resp,
+    mode = 'everything',
+    positive = 'YES'
+  )
+}
+```
+
+```{r}
+
+
+# To Do - remove the indexes and add in variable names
+runModel <- function(train.data, method.name) {
+  caret::train(
+    train.data[, c("WSPEED",
+                   "TEMP",
+                   "BIRDCOUNT",
+                   "TOTAL",
+                   "COVER",
+                   "RTIME",
+                   "MONTH", "YEAR", "WEEKOFDAY")],
+    train.data[, c("STRIKE")],
+    data = train.data,
+    tuneLength = 5,
+    method = method.name,
+    metric = 'ROC',
+    trControl = tc,
+    preProcess = c("center", "scale")
+  )
+}
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+# Fit Naive Bayes Model for upsampled data
+model.nb.up <- runModel(train.up.data, "nb")
+
+validateAndPrintResult(model.nb.up, test.up.data)
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Fit Naive Bayes Model with downsampled data
+model.nb.down <- runModel(train.dn.data, "nb")
+
+validateAndPrintResult(model.nb.down, test.dn.data)
+
+```
+
+```{r}
+# Fit Random Forest Model with upsampled data
+model.up.rf <- runModel(train.up.data, "rf")
+
+validateAndPrintResult(model.up.rf, test.up.data)
+```
+
+```{r}
+# Fit Random Forest Model with down sampled data
+model.dn.rf <- runModel(train.dn.data, "rf")
+
+validateAndPrintResult(model.dn.rf, test.dn.data)
+```
+
+```{r}
+# Compare model performances using resample()
+models_compare <-
+  resamples(
+    list(
+      NB_UP = model.nb.up,
+      NB_DN = model.nb.down,
+      RF_UP = model.up.rf,
+      RF_DOWN = model.dn.rf
+    )
+  )
+
+# Summary of the models performances
+summary(models_compare)
+```
+
+```{r}
+# Draw box plots to compare models
+scales <- list(x = list(relation = "free"),
+               y = list(relation = "free"))
+bwplot(models_compare, scales = 'free', layout = c(1,1))
+```
 
 ```{r}
  
-model <-
-  glm(
-    STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
-    data = train,
+model.up.glm <-
+  glm (
+    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
+    data = train.up.data,
     family = binomial
   )
-summary(model)
+summary(model.up.glm)
 ```
 ```{r}
 ## Predict the Values
-predict <- predict(model, test, type = 'response')
+predict <- predict(model.up.glm, test.up.data, type = 'response')
 
 ## Create Confusion Matrix
-table(test$STRIKE, predict > 0.3)
+table(test.up.data$STRIKE, predict > 0.1)
 
-
-```
-
-```{r}
 # ROC Curve
-ROCRpred <- prediction(predict, test$STRIKE)
+ROCRpred <- prediction(predict, test.up.data$STRIKE)
 ROCRperf <- performance(ROCRpred, 'tpr','fpr')
 plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
 ROCRperf
+
+# # Predict using test data and generate confusion matrix
+# predicted.response <- predict(model, test.up.data, )
+# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
+# 
+# predicted.response
+summary(model.up.glm) # Summary of model
+cmLR <- table(predict>0.1, test.up.data$STRIKE)
+cmLR # Confusion matrix
+errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
+errorLR # error rate
+accuracyLR <- 100 - errorLR
+accuracyLR # accuracy rate
+precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
+precisionLR # precision
+recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
+recallLR # recall
+FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
+FscoreLR # F-score
 ```
 
 ```{r}
-rf = randomForest(
-  STRIKE ~  WANGLE + WSPEED + TEMP + CLOUDH + COVER + BIRDCOUNT + TOTAL,
-  ntree = 1000,
-  data = train
-)
-plot(rf) 
-```
+model.dn.glm <-
+  glm (
+    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
+    data = train.dn.data,
+    family = binomial
+  )
+summary(model.dn.glm)
 
-
-```{r}
-# Predict using test data and generate confusion matrix
-predicted.response <- predict(rf, test, type = 'response')
-confusionMatrix(data = predicted.response,
-                reference = test$STRIKE)
 ```
 
 ```{r}
-m <-glm.nb(STRIKES ~`TOTAL` + VIS + TEMP + COVERH + CLOUDH + SLP + BIRDCOUNT +
-             `WIND SPEED` + `WIND ANGLE`, data = model.data.day)
+## Predict the Values
+predict <- predict(model.dn.glm, test.dn.data, type = 'response')
 
+## Create Confusion Matrix
+table(test.dn.data$STRIKE, predict > 0.1)
+
+# ROC Curve
+ROCRpred <- prediction(predict, test.dn.data$STRIKE)
+ROCRperf <- performance(ROCRpred, 'tpr','fpr')
+plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
+ROCRperf
+
+# # Predict using test data and generate confusion matrix
+# predicted.response <- predict(model, test.up.data, )
+# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
+# 
+# predicted.response
+summary(model.dn.glm) # Summary of model
+cmLR <- table(predict>0.1, test.dn.data$STRIKE)
+cmLR # Confusion matrix
+errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
+errorLR # error rate
+accuracyLR <- 100 - errorLR
+accuracyLR # accuracy rate
+precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
+precisionLR # precision
+recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
+recallLR # recall
+FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
+FscoreLR # F-score
 ```
 
