@@ -163,20 +163,20 @@ corr_cross(corr.data)
 ```{r}
 # Use Random Forest variable importance technique for variable selection
 # The below list has been tailored after multiple iterations
-# fit <- randomForest::randomForest(
-#   as.factor(STRIKE) ~ .,
-#   data = strikes.data,
-#   importance = TRUE,
-#   proximity = FALSE,
-# )
-# importance(fit)
-# 
-# varImp(fit)
-# varImpPlot(fit, type = 2)
-# importanceOrder = order(-fit$importance)
-# 
-# names <- rownames(fit$importance)
-# names
+fit <- randomForest::randomForest(
+  as.factor(STRIKE) ~ .,
+  data = strikes.data,
+  importance = TRUE,
+  proximity = TRUE,
+)
+importance(fit)
+
+varImp(fit)
+varImpPlot(fit, type = 2)
+importanceOrder = order(-fit$importance)
+
+names <- rownames(fit$importance)
+names
 ```
 
 ```{r}
@@ -326,6 +326,10 @@ upsample.data <- upsample.data %>%
 describe(upsample.data)
 ```
 
+```{r}
+head(upsample.data, 10)
+```
+
 
 ```{r}
 downsample.data <-
@@ -354,6 +358,9 @@ downsample.data <- downsample.data %>%
 
 ```{r}
 describe(downsample.data)
+```
+```{r}
+head(downsample.data, 10)
 ```
 
 
