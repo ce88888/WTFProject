@@ -64,6 +64,7 @@ require(boot)
 model.data <- readRDS("KDEN_FINAL.RDS")
 
 #Running the Code to Group the Data by Day. THis removes Rtime, Arrivals, Departures
+#### CE comment: Total I think should not be the sum, but the mean? The Total is replicated for each line in the base data set but refers to the arrivals+departures in that hourly slot, so I think adding them up gets to a total beyond what actually happened?
 model.data.day <- model.data %>%
   group_by(`AIRPORT ID`,DATE) %>%
   summarise(`TOTAL` = sum(`TOTAL`), 
@@ -258,6 +259,10 @@ table(compare$STRIKES)
 View(compare)
 table(compare$accuracy1)
 table(compare$accuracy2)
+#### look at which ones are off ... not too bad?
+
+x <- compare[which(!compare$accuracy2),] %>% mutate(delta = STRIKES-predictions)
+
 #Filter only predicted strikes that were TRUE... only 3 accurate predictions
 acc<- filter(compare, accuracy == TRUE, predictions != 0) 
 false<- filter(compare, accuracy == FALSE) 
