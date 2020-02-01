@@ -47,6 +47,9 @@ if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
 for(package in packages){
   library(package, character.only = TRUE)
 }
+
+###### CE comment: This next line does not work on my machine, not sure why
+
 library("ROCR", "lares", "caret", "countreg","Information")
 require(pscl)
 require(MASS)
@@ -91,12 +94,15 @@ date.add <- data.frame(
 )
 
 # Bind new cols to the original dataset
+###### CE comment: Try using mutate, in fact can do that above in the block of code summarising by day
 model.data.day <- cbind(model.data.day, date.add)
 
 # Remove AirportId and Date columns
+###### CE comment: Avoid by number actions, use dplyr verbs with column names as clearer and not prone to errors if column order changes
 model.data.day <- model.data.day[,-c(1,2)]
 
 # Rename Windangle and windspeed
+###### CE comment: Hmm ... just set it to what you want it to be called in the code above, this is unnecessary duplicatoin
 model.data.day <-
   model.data.day %>% dplyr::rename(WANGLE = `WIND ANGLE`,
                                WSPEED = `WIND SPEED`)
@@ -125,7 +131,12 @@ test.data <- model.data.day[-trainRowNumbers, ]
 
 ```{r Regression Model}
 #Model 1: Run a Regular Stepwise Linar Regression on the Entire DataSet 
-glmStepAIC <- train(STRIKES ~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+VIS,
+
+###### CE comment: can't include STRIKE here - you won't know ahead of time if a day will be Strike Y/N
+# glmStepAIC <- train(STRIKES ~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+VIS,
+#                   data = model.data.day, 
+#                   method="glmStepAIC")
+glmStepAIC <- train(STRIKES ~ TOTAL+ WEEKOFDAY + BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+VIS,
                   data = model.data.day, 
                   method="glmStepAIC")
 summary(glmStepAIC)
@@ -144,7 +155,7 @@ print(classlist)
 
 
 ```{r Negative Binomial}
-#Running Modelson training data 
+#Running Models on training data 
 
 #Vew
 # classlist<-lapply(model.data.day,class)
@@ -204,22 +215,49 @@ modelglm.nb <- glm.nb(STRIKES~
                         DAY+
                         WEEKOFDAY,
                   data=train.data, link = "log")
-summary(modelglm)
+summary(modelglm.nb)
+##### CE comment: The theta is very large, so this seems to be coming back to a Poisson, although I'm not sure what to make of the failure to converge
+##### Also: this violates what Seamans said to you guys on the call, you have nested time dummies here. Days are already in weeks, and weeks are already in months ...?
+modelglm.nb$finalModel
 
-modelglm$finalModel
+modelglm.poisson <- glm(STRIKES~
+                        TOTAL+ 
+                        STRIKE+ 
+                        BIRDCOUNT+ 
+                        TEMP+ 
+                        SLP+ 
+                        WANGLE+ 
+                        WSPEED+ 
+                        COVER+ 
+                        CLOUDH+ 
+                        COVERH+ 
+                        PRECIP+ 
+                        VIS+
+                        MONTH,
+                  data=train.data, family=poisson)
+summary(modelglm.poisson)
+#### CE comment: Good news in this smaller model seems to be that the residual deviance is still pretty low compared to the null, but nothing seems to be particularly significant
 
-predictions<-predict(modelglm,test.data)
+predictions<-predict(modelglm.poisson,test.data, type="response" )
+### CE comment: How can the poisson model get to negative predicted counts ....? this shouldn't be possible by definition as Poisson >=0 .... on googling, seems you left out type=response
+
+
 #Create a comparison table of the actual test data and the prediction 
 compare<- test.data%>% 
   dplyr::select("YEAR","MONTH","DAY","STRIKES")
 #combine the predictions 
 compare<-cbind(compare,predictions)
 #create the accuracy binary output
-compare$accuracy<- ifelse(compare$STRIKE == compare$predictions,TRUE,FALSE)
+#### CE comment: I don't think this code will do what you want it to do. You're comparing two numbers, if you look at the data 6.232390e-11 will never == 0 (even though it is pretty much that), so you are underestimating accuracy ... when rounding, we may be overestimating on the other hand vs. some threshold one might want to set (as in how close should the prediction be)
+# Note also that equality may be too strict even after rounding. If we have 4 strikes but predicted 5, do we care? We'd care if we predicted none, for sure, but I think we may want to set a threshold there, too, as I think we briefly discussed on the last call.
+compare$accuracy1<- ifelse(compare$STRIKE == compare$predictions,TRUE,FALSE)
+compare$accuracy2<- ifelse(round(compare$STRIKE,0) == round(compare$predictions,0),TRUE,FALSE)
+
 #summary of the accuracy 
 table(compare$STRIKES)
 View(compare)
-table(compare$accuracy)
+table(compare$accuracy1)
+table(compare$accuracy2)
 #Filter only predicted strikes that were TRUE... only 3 accurate predictions
 acc<- filter(compare, accuracy == TRUE, predictions != 0) 
 false<- filter(compare, accuracy == FALSE) 
@@ -241,9 +279,12 @@ resple <- createResample(train.data,times = 10)
 train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
 
 ##Poisson
+#### CE comment: Why are you doing a poisson on a y/n target variable?
+## also, you're peeking, all data includes STRIKES, which won't be known ahead of time
 modelPos <- train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP, family = poisson(link = "log"))
  summary(modelPos)
 ##QuasiPosson
+#### CE comment: Why are you doing a poisson on a y/n target variable?
 modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
                 family = quasipoisson(link = "log"))
   summary(modelQPos)
@@ -255,15 +296,18 @@ modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train
 ```{r}
 # train the models
 ##General Linear Model 
+#### CE comment: See above (start) ... you are peeking, don't know if STRIKE is Y/N ahead of time
 modelglm <- train(STRIKE~TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS,
                   data=train.data, trControl=train_control, method="glm")
   summary(modelglm)
 
+  ### Same issue here as you're including all variables
 Pmodel <- train(STRIKE~., data = train.data, method = "glm", trControl = train_control,family = poisson(link = "log"))
 QPmodel <-train(STRIKE~., data = train.data, method = "glm", trControl = myCtrl,family = quasipoisson(link = "log"))
 summary(Pmodel)
   
 #Resample for the Poisson & QP
+### I'm not sure if that is necessary / need to understand logic?
 resple <- createResample(train.data,times = 10)
 train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
 
@@ -271,10 +315,26 @@ train_controlP <- trainControl(method = "cv", index = resple, timingSamps = 5)
 modelPos <- train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP, family = poisson(link = "log"))
  summary(modelPos)
 ##QuasiPosson
-modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
-                family = quasipoisson(link = "log"))
-  summary(modelQPos)
-
+# modelQPos <-train(STRIKE~., data = train.data, method = "glm", trControl = train_controlP,
+#                 family = quasipoisson(link = "log"))
+#   summary(modelQPos)
+modelQPos <-train(STRIKES~
+                        TOTAL+ 
+                        STRIKE+ 
+                        BIRDCOUNT+ 
+                        TEMP+ 
+                        SLP+ 
+                        WANGLE+ 
+                        WSPEED+ 
+                        COVER+ 
+                        CLOUDH+ 
+                        COVERH+ 
+                        PRECIP+ 
+                        VIS+
+                        MONTH, data = train.data, method = "glm", trControl = train_controlP,
+                 family = quasipoisson(link = "log"))
+### This throws a warning, if I interpret this right, it may be too small a sample, or it may multi-colinearity
+   summary(modelQPos)
   
 ```
 
@@ -293,6 +353,7 @@ strikes.cat <-model.data.day[, c("MONTH","WEEKOFDAY","STRIKE")]
 
 
 ### Ranking variables using penalized IV
+# don't know anything about this, but keen to understand, let's discuss on the phone
 info.val.data <-
   Information::create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
 
