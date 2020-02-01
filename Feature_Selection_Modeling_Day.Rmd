@@ -1,238 +1,168 @@
 ---
-title: "FeatureSelection & Modeling"
-author: "Team Strikes"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
-output:
-  html_document:
-  code_folding: hide
-  highlight: pygment
-  theme: united
+title: "Feature Selection and Modeling by Model"
+author: "Tanu Kajla"
+date: "January 25, 2020"
+output: html_document
 ---
-  
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(
-  echo = TRUE,
-  message = FALSE,
-  warning = FALSE,
-  dpi = 100
-)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
-
 # Creating a vector of packages used within
 packages <- c(
-  'tidyverse',
-  'data.table',
-  'scales',
-  'magrittr',
-  'tidyselect',
-  'lubridate',
-  'zoo',
-  'VIM',
-  'psych',
-  'MASS',
-  'varrank',
-  'proxy',
-  'caret',
-  'randomForest',
-  'mlbench',
-  'pROC',
-  'e1071',
-  'DMwR',
-  'caTools',
-  'ROCR',
-  'lares',
-  'klaR',
-  'MLeval',
-  'splitstackshape',
+  'arm',
+  'boot',
   'Boruta',
-  'mctest',
+  'car',
+  'caret',
+  'caTools',
+  'data.table',
+  'DMwR',
+  'dplyr',
+  'e1071',
   'Information',
-  'pastecs'
+  'klaR',
+  #'lares',
+  'leaps',
+  'lubridate',
+  'magrittr',
+  'MASS',
+  'mctest',
+  'mlbench',
+  'MLeval',
+  'pastecs',
+  'PerformanceAnalytics',
+  'pROC',
+  'proxy',
+  'pscl',
+  'psych',
+  'randomForest',
+  'ROCR',
+  'Rtsne',
+  'scales',
+  'splitstackshape',
+  'tidyselect',
+  'tidyverse',
+  'varrank',
+  'VIM',
+  'zoo'
 )
 
 # Checking for package installations on the system and installing if not found
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
-  install.packages(setdiff(packages, rownames(installed.packages())))
+  install.packages(setdiff(packages, rownames(installed.packages())))  
 }
 
 # Including the packages for use
-for (package in packages) {
+for(package in packages){
   library(package, character.only = TRUE)
 }
 
+#install.packages("countreg", repos="http://R-Forge.R-project.org")
+
 ```
 
-```{r}
+#Data Processing
+
+```{r Model Data by Day}
+
+########### Data Pre-Processing  ###########
 # Read dataset from RDS
 model.data <- readRDS("KDEN_FINAL.RDS")
 
-head(model.data)
-```
+#Running the Code to Group the Data by Day. THis removes Rtime, Arrivals, Departures
+model.data.day <- model.data %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`TOTAL` = sum(`TOTAL`), 
+            STRIKES = sum(STRIKE), #Sum of Strikes
+            STRIKE = sum(STRIKE), #Will be Converted to Binary Strikes
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), 
+            SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), 
+            `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            `COVER`= mean(`COVER`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), 
+            COVERH = mean(COVERH, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T),
+            VIS = mean(VIS, na.rm=T)) %>% 
+    mutate(STRIKE = ifelse(STRIKE>0,1,0))
 
-```{r}
-summary(model.data[3:12])
-```
-
-
-```{r}
+#Converting the new day data into a data frame 
+model.data.day<-as.data.frame(model.data.day)
+model.data.day$STRIKE<-as.factor(model.data.day$STRIKE)
 
 # Add Year, Month, Day and Weekday fields to  the dataset as factors
-# Bind new cols to the original dataset
-  model.data <- cbind(
-    model.data,
-    data.frame(
-      YEAR = as.factor(format(model.data$DATE, format = "%Y")),
-      MONTH = as.factor(format(model.data$DATE, format = "%m")),
-      DAY = as.factor(format(model.data$DATE, format = "%d")),
-      WEEKOFDAY = as.factor(format(model.data$DATE, format = "%V"))
-    )
-  )
+date.add <- data.frame(
+  YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
+  MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
+  DAY = as.factor(format(model.data.day$DATE, format = "%d")),
+  WEEKOFYEAR = as.factor(format(model.data.day$DATE, format = "%V"))
+)
 
-# Remove AirportId and Date columns -- to do put column names
-model.data <-
-  subset(model.data, select = -c(`AIRPORT ID`, DATE, ARRIVALS, DEPARTURES))
+# Bind new cols to the original dataset
+model.data.day <- cbind(model.data.day, date.add)
+
+# Remove AirportId and Date columns
+model.data.day <- model.data.day[,-c(1,2)]
 
 # Rename Windangle and windspeed
-model.data <-
-  model.data %>% dplyr::rename(WANGLE = `WIND ANGLE`,
+model.data.day <-
+  model.data.day %>% dplyr::rename(WANGLE = `WIND ANGLE`,
                                WSPEED = `WIND SPEED`)
 
 # Because of memory constraints considering only 2 years data
-model.data <- model.data %>% filter(model.data$YEAR %in% c(2014,2015,2016,2017,2018))
+model.data.day <- model.data.day %>% filter(model.data.day$YEAR %in% c(2014,2015,2016,2017,2018))
 
-# Converting target as a factor
-model.data$STRIKE <- as.factor(model.data$STRIKE)
+########### Create the Training and Test Data Set Data Sets ###########
+# Create the training and test datasets
+set.seed(500)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers <-
+  createDataPartition(model.data.day$STRIKE, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- model.data.day[trainRowNumbers, ]
+
+# Step 3: Create the test dataset
+test.data <- model.data.day[-trainRowNumbers, ]
+
 ```
 
-```{r}
-# Run this on the original dataset
-# clusterKmeans(model.data, k=5, limit = 5, ohse = TRUE, norm = TRUE, seed = 1234)
-```
 
-```{r}
+```{r Functions & Parameters}
+########### Functions ###########
+validateAndPrintResultC <- function(model, test.data) {
+  # Summarise Results
+  print(model)
+  summary(model)
+  model$finalModel
 
-years.list <- c(2014, 2015, 2016, 2017, 2018)
+  # Predict on testData
+  predicted.resp <- round(predict(model, test.data))
+  
+  # head(predicted.resp)
+  compare<- test.data%>% 
+  dplyr::select("YEAR","MONTH","DAY","STRIKES")
+  
+  compare<-cbind(compare,predicted.resp)
+  compare$accuracy<- ifelse(compare$STRIKES == compare$predicted.resp,TRUE,FALSE)
+  acc<- filter(compare, accuracy == TRUE, predicted.resp != 0) 
+  false<- filter(compare, accuracy == FALSE)
+  print(table(compare$accuracy))
+  print(acc)
+  print(false)
 
-for (year in years.list) {
-  set.seed(42)  # good idea to set the random seed for reproducibility
-  temp.data <- model.data %>% filter(model.data$YEAR == year)
-  temp.0.data <- temp.data %>% filter(temp.data$STRIKE == 0)
-  temp.1.data <- temp.data %>% filter(temp.data$STRIKE == 1)
-  sample.0.data <- stratified(temp.0.data, c('STRIKE'), 0.02)
-  sample.1.data <- stratified(temp.1.data, c('STRIKE'), 0.4)
-  sample.data <- rbind(sample.0.data, sample.1.data)
-  if (year == 2014) {
-    strikes.data <- sample.data
-  }
-  else{
-    strikes.data <- bind_rows(strikes.data, sample.data)
-  }
 }
 
-rm(temp.0.data, temp.1.data, temp.data, sample.0.data, sample.1.data, sample.data)
-```
+#External Plot for Corr Plot 
+source("http://www.sthda.com/upload/rquery_cormat.r")
 
-
-
-```{r}
-corr.data <-
-  strikes.data %>% dplyr::select(STRIKE,
-                                    WANGLE,
-                                    WSPEED,
-                                    TEMP,
-                                    CLOUDH,
-                                    COVER,
-                                    COVERH,
-                                    BIRDCOUNT,
-                                    TOTAL,
-                                    SLP,
-                                    VIS,
-                                    PRECIP
-                                    # RTIME,
-                                    # MONTH,
-                                    # DAY
-                                    )
-
-corr_cross(corr.data)
-```
-
-
-
-```{r}
-# Use Random Forest variable importance technique for variable selection
-# The below list has been tailored after multiple iterations
-# fit <- randomForest::randomForest(
-#   as.factor(STRIKE) ~ .,
-#   data = strikes.data,
-#   importance = TRUE,
-#   proximity = FALSE,
-# )
-# importance(fit)
-# 
-# varImp(fit)
-# varImpPlot(fit, type = 2)
-# importanceOrder = order(-fit$importance)
-# 
-# names <- rownames(fit$importance)
-# names
-```
-
-```{r}
-# fit <- randomForest::randomForest(
-#   as.factor(STRIKE) ~ .,
-#   data = downsample.data,
-#   importance = TRUE,
-#   proximity = TRUE,
-# )
-# importance(fit)
-# 
-# varImp(fit)
-# varImpPlot(fit, type = 2)
-# importanceOrder = order(-fit$importance)
-# 
-# names <- rownames(fit$importance)
-# names
-```
-
-```{r}
-
-# var.boruta <-
-#   Boruta(
-#     as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + TOTAL + SLP + VIS + PRECIP + RTIME + MONTH + DAY + RTIME + WEEKOFDAY,
-#     data = sample.data
-#   )
-# print(var.boruta)
-# plot(var.boruta, cex.axis = 0.8, las = 1)
-```
-
-
-```{r}
-
-# # prepare training scheme
-# control <- trainControl(method = "cv", number = 2)
-# 
-# # train the model
-# model <- train(STRIKE~., data = strikes.data, method = "lvq", preProcess = "scale", trControl = control)
-# 
-# # estimate variable importance
-# importance <- varImp(model, useModel = FALSE)
-# 
-# # summarize importance
-# print(importance)
-# 
-# # plot importance
-# plot(importance)
-```
-
-```{r}
-# Helper function for VIF
-VIF <-
-  function(linear.model,
-           no.intercept = FALSE,
-           all.diagnostics = FALSE,
-           plot = FALSE) {
+#VIF Function
+VIF <-function(linear.model,no.intercept = FALSE, all.diagnostics = FALSE,plot = FALSE) {
     if (no.intercept == FALSE)
       design.matrix <- model.matrix(linear.model)[, -1]
     if (no.intercept == TRUE)
@@ -248,162 +178,26 @@ VIF <-
       output <-
         imcdiag(design.matrix, linear.model$model[1])
     output
-  }
-
-```
-
-```{r}
-set.seed(123)
-strikes.sample <-
-  strikes.data[, c(
-    "STRIKE",
-    "WANGLE",
-    "WSPEED",
-    "TEMP",
-    "COVER",
-    "BIRDCOUNT",
-    "TOTAL"
-  )]
-
-strikes.sample$STRIKE <- as.numeric(strikes.sample$STRIKE)
-
-# strikes.sample[, 2:12] <- scale(strikes.sample[, 2:12])
-
-fit <- glm(STRIKE ~ ., data = strikes.sample)
-VIF(fit, all.diagnostics = TRUE, plot = TRUE)
-
-```
-
-
-```{r}
-
-# strikes.cat <-
-#   model.data[, c("RTIME", "MONTH", "WEEKOFDAY", "STRIKE")]
-# 
-# ### Ranking variables using penalized IV
-# info.val.data <-
-#   create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
-# 
-# info.val = data.frame(info.val.data$Summary)
-# info.val.data$Summary
-
-nzv <- nearZeroVar(strikes.data, saveMetrics = TRUE)
-nzv[nzv[,"zeroVar"] > 0, ] # Check for zero variance predictors. None
-nzv[nzv[,"zeroVar"] + nzv[,"nzv"] > 0, ] # Check for near-zero variance predictors
-
-```
-
-
-
-```{r}
-# SMOTE oversampling for Classification 
-upsample.data <-
-  SMOTE(
-    STRIKE ~  WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
-    strikes.data,
-    perc.over = 1600,
-    perc.under = 800,
-    k = 10
+}
+runModel <- function(train.data, method.name) {
+  caret::train(
+    train.data[, c("WSPEED",
+                   "TEMP",
+                   "BIRDCOUNT",
+                   "TOTAL",
+                   "COVER",
+                   #"RTIME",
+                   "WEEKOFYEAR",
+                   "MONTH")],
+    train.data[, c("STRIKE")],
+    data = train.data,
+    tuneLength = 5,
+    method = method.name,
+    metric = 'ROC',
+    trControl = tc,
+    preProcess = c("center", "scale")
   )
-
-upsample.data <- upsample.data %>% dplyr::select(STRIKE,
-                                                 WSPEED,
-                                                 TEMP,
-                                                 BIRDCOUNT,
-                                                 TOTAL,
-                                                 COVER,
-                                                 RTIME,
-                                                 WEEKOFDAY,
-                                                 MONTH,
-                                                 YEAR)
-
-upsample.data <- upsample.data %>%
-  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
-
-```
-
-```{r}
-describe(upsample.data)
-```
-
-
-```{r}
-downsample.data <-
-  SMOTE(
-    STRIKE ~ WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + RTIME + MONTH + WEEKOFDAY + YEAR,
-    strikes.data,
-    perc.over = 800,
-    perc.under = 1600,
-    k = 10
-  )
-
-downsample.data <- downsample.data %>% dplyr::select(STRIKE,
-                                                     WSPEED,
-                                                     TEMP,
-                                                     BIRDCOUNT,
-                                                     TOTAL,
-                                                     COVER,
-                                                     RTIME,
-                                                     WEEKOFDAY,
-                                                     MONTH,
-                                                     YEAR)
-
-downsample.data <- downsample.data %>%
-  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
-```
-
-```{r}
-describe(downsample.data)
-```
-
-
-```{r}
-# Create the training and test datasets
-set.seed(100)
-
-# Step 1: Get row numbers for the training data
-trainRowNumbers.up <-
-  createDataPartition(upsample.data$STRIKE, p = 0.75, list = FALSE)
-
-# Step 2: Create the training  dataset
-train.up.data <- upsample.data[trainRowNumbers.up, ]
-
-# Step 3: Create the test dataset
-test.up.data <- upsample.data[-trainRowNumbers.up, ]
-
-```
-
-```{r}
-# Create the training and test datasets
-set.seed(100)
-
-# Step 1: Get row numbers for the training data
-trainRowNumbers.dn <-
-  createDataPartition(downsample.data$STRIKE, p = 0.75, list = FALSE)
-
-# Step 2: Create the training  dataset
-train.dn.data <- downsample.data[trainRowNumbers.dn, ]
-
-# Step 3: Create the test dataset
-test.dn.data <- downsample.data[-trainRowNumbers.dn, ]
-
-```
-
-
-```{r}
-
-# 5 Fold cross validation with Probabilities
-tc <- trainControl(
-  method = "cv",
-  number = 5,
-  savePredictions = "final",
-  classProbs = TRUE,
-  verboseIter = TRUE,
-  summaryFunction = twoClassSummary
-)
-```
-
-```{r}
+}
 validateAndPrintResult <- function(model, test.data) {
   # Summarise Results
   print(model)
@@ -423,35 +217,619 @@ validateAndPrintResult <- function(model, test.data) {
     positive = 'YES'
   )
 }
+
+
+########### Parameters ###########
+#train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+train_control <- trainControl(method="cv", number=5)
+
+#all variables excluding the strikes factor (highly correlated, no value)
+#total variables
+regression<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  SLP+
+  WANGLE+
+  WSPEED+
+  COVER+
+  CLOUDH+
+  COVERH+
+  PRECIP+
+  VIS+
+  MONTH+
+  #DAY+
+  WEEKOFYEAR
+
+#selected variables
+regression1<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  #SLP+
+  WANGLE+
+  WSPEED+
+  #COVER+
+  CLOUDH+
+  COVERH+
+  #PRECIP+
+  VIS+
+  #YEAR+
+  MONTH+
+  DAY+
+  WEEKOFYEAR
+
+#removal of time variables
+regression2<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  BIRDCOUNT+
+  TEMP+
+  SLP+
+  WANGLE+
+  WSPEED+
+  COVER+
+  CLOUDH+
+  COVERH+
+  PRECIP+
+  VIS
+  #MONTH+
+  #DAY+
+  #WEEKOFYEAR
+
+
+
+```
+
+```{r correlation data}
+corr.data <-
+  model.data.day %>% dplyr::select(STRIKES,
+                               WANGLE,
+                               WSPEED,
+                               TEMP,
+                               CLOUDH,
+                               COVER,
+                               COVERH,
+                               BIRDCOUNT,
+                               TOTAL,
+                               SLP,
+                               VIS,
+                               PRECIP)
+corr.list<-rquery.cormat(corr.data, type="flatten", graph=FALSE)
+cormat<-rquery.cormat(corr.data, graphType="heatmap")
+rquery.cormat(corr.data, type="full")
+corr<-corr.list$r
+
+```
+
+#Count Modeling
+
+```{r Stepwise Feature Selection Model}
+########### Stepwise Feature Selection (fully fitted)
+#Run a Regular Stepwise Linar Regression on the Entire DataSet --- TAKES A LONG TIME WITH TIME VARIABLES
+glmStepAIC <- train(regression2,
+                    data = model.data.day,
+                    method="glmStepAIC",
+                    trControl = train_control)
+#Print the Results.. This is totally overfitted because it was run on the entire data set to get feature selection 
+validateAndPrintResultC(glmStepAIC,test.data)
+
+########### RANDOM AIC RESULTS ########### 
+
+# 729 samples
+#  12 predictor
+# 
+# No pre-processing
+# Resampling: Cross-Validated (5 fold) 
+# Summary of sample sizes: 584, 583, 583, 583, 583 
+# Resampling results:
+# 
+#   RMSE       Rsquared   MAE      
+#   0.3121226  0.7730515  0.1370295
+# 
+# 
+# FALSE  TRUE 
+#    10   135 
+
+#Altnerate modelbase
+#modelbase<-glm(STRIKES~ TOTAL+ STRIKE+ BIRDCOUNT+ TEMP+ SLP+ WANGLE+ WSPEED+ COVER+ CLOUDH+ COVERH+ PRECIP+ VIS+ WEEKOFYEAR, data = model.data.day)
+#alternate feature selection 
+#step <- stepAIC(modelbase)
+#step$anova # display results
+
+# define training control
+
+# Step:  AIC=329.67
+# .outcome ~ STRIKE + TEMP + WANGLE + WSPEED + COVER + CLOUDH + 
+#     PRECIP
+
+# Step:  AIC=377.81
+# .outcome ~ STRIKE1 + TEMP + WANGLE + COVER + VIS
+# 
+#           Df Deviance     AIC
+# <none>         70.306  377.81
+# - VIS      1   70.568  378.53
+# - COVER    1   70.606  378.92
+# - WANGLE   1   70.650  379.37
+# - TEMP     1   70.668  379.56
+# - STRIKE1  1  291.892 1413.57
+# Generalized Linear Model with Stepwise Feature Selection 
+
+#After runing all the variables
+
+# Step:  AIC=1361.23
+# .outcome ~ WSPEED + VIS + MONTH08 + MONTH09 + MONTH10 + DAY03 + 
+#     DAY07 + DAY29 + WEEKOFYEAR19 + WEEKOFYEAR20 + WEEKOFYEAR21 + 
+#     WEEKOFYEAR22 + WEEKOFYEAR23 + WEEKOFYEAR24 + WEEKOFYEAR25 + WEEKOFYEAR26 + 
+#     WEEKOFYEAR27 + WEEKOFYEAR29 + WEEKOFYEAR30 + WEEKOFYEAR31 + WEEKOFYEAR32 + 
+#     WEEKOFYEAR33 + WEEKOFYEAR34 + WEEKOFYEAR35 + WEEKOFYEAR37 + WEEKOFYEAR40
+
+#             Df Deviance    AIC
+# <none>           801.92 3691.3
+# - BIRDCOUNT  1   802.88 3691.5
+# - TOTAL      1   803.52 3693.0
+# - VIS        1   804.20 3694.5
+# - SLP        1   804.28 3694.7
+# - COVERH     1   806.00 3698.6
+# - TEMP       1   815.75 3720.5
+# Generalized Linear Model with Stepwise Feature Selection 
+# 
+# 1822 samples
+#   11 predictor
+
+
+```
+
+```{r Regression Model}
+########### General Model ########### 
+modelglm <- train(regression1,
+                  data=train.data,
+                  method="glm" ,
+                  trControl = train_control)
+
+validateAndPrintResultC(modelglm,test.data)
+
+plot(caret::varImp(modelglm))
+
+########### Results ########### 
+
+# 584 samples
+#  11 predictor
+# 
+# No pre-processing
+# Resampling: Cross-Validated (5 fold) 
+# Summary of sample sizes: 468, 468, 467, 467, 466 
+# Resampling results:
+# 
+#   RMSE       Rsquared    MAE      
+#   0.6766016  0.03640392  0.4935009
+# 
+# prediction from a rank-deficient fit may be misleading
+# FALSE  TRUE 
+#    54    91 
+
+# 8 Accurate predicted Flights
+
+```
+
+
+```{r Negative Binomial}
+#Negative Binomial
+modelglm.nb <- glm.nb(regression1,
+                  data=train.data, link = "sqrt",
+                  method = "glm.fit")
+
+validateAndPrintResultC(modelglm.nb,test.data)
+
+plot(modelglm.nb)
+
+########### Results ########### 
+# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
+# Null Deviance:	    1318 
+# Residual Deviance: 1109 	AIC: 2295
+# 
+# FALSE  TRUE 
+#   207   156 
+########### Failed Code ########### 
+
+## want to try the NEGBINOMAIL with CAROT -- DOESN"T WORK
+# train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+# 
+# modelglm.nb <- train(STRIKES~
+#                        TOTAL+
+#                         #STRIKE+
+#                         BIRDCOUNT+
+#                         TEMP+
+#                         #SLP+
+#                         WANGLE+
+#                         WSPEED+
+#                         #COVER+
+#                         CLOUDH+
+#                         COVERH+
+#                         #PRECIP+
+#                         VIS,
+#                         #YEAR+
+#                         #MONTH+
+#                         #DAY+
+#                         #WEEKOFYEAR,
+#                   data=train.data,
+#                   method="glm.nb" ,
+#                   trControl = trainControl(method = "boot"),
+#                   link="sqrt",
+#                   trace =TRUE,
+#                   maxit = 10)
+# validateAndPrintResultC(modelglm.nb,test.data)
+
+```
+
+
+```{r Poisson Model }
+##Poisson
+modelPos <- glm(regression1, 
+               data = train.data, 
+               family= poisson(link = "sqrt"))
+
+validateAndPrintResultC(modelPos,test.data)
+
+plot(modelPos)
+
+########### Results ########### 
+
+#Updating the link
+# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
+# Null Deviance:	    1464 
+# Residual Deviance: 1236 	AIC: 2300
+# 
+# FALSE  TRUE 
+#   208   155 
+
+
+
+#The model is currently predicting negative strikes.. how do i control for this? 
+
+# Degrees of Freedom: 583 Total (i.e. Null);  483 Residual
+# Null Deviance:	    550.9 
+# Residual Deviance: 383.6 	AIC: 920.8
+# 
+# FALSE  TRUE 
+#   129    16 
+
+```
+
+```{r Quasi Poisson}
+##QuasiPosson
+modelQPos<-glm(regression1, 
+              data = train.data, quasipoisson)
+
+validateAndPrintResultC(modelQPos,test.data)
+
+plot(modelQPos)
+
+#Looks Promising 
+
+```
+
+
+```{r Information Gain}
+model.hurdle<- pscl::hurdle(regression3, data = train.data, dist = "poisson", zero.dist = "binomial")
+validateAndPrintResultC(model.hurdle,test.data)
+
+regression3<-STRIKES~
+  TOTAL+
+  #STRIKE+
+  #BIRDCOUNT
+  #TEMP+
+  #SLP+
+  #WANGLE+
+  #WSPEED+
+  #COVER+
+  #CLOUDH+
+  #COVERH+
+  #PRECIP+
+  #VIS
+  #YEAR+
+  #MONTH+
+  #DAY+
+  #WEEKOFYEAR
+
+#Cant run the hurdle since the variables are highly correlated with one another
+  
+```
+
+
+```{r ols}
+ols <-lm(regression1, data = train.data)
+validateAndPrintResultC(ols,test.data)
+plot(ols)
+
+```
+
+
+```{r Fixed Effects-- DOESN't WORK}
+regression.time<-STRIKES~
+   TOTAL+
+  # #STRIKE+
+   BIRDCOUNT+
+  # TEMP+
+  # #SLP+
+  # WANGLE+
+   WSPEED+
+  # #COVER+
+  # CLOUDH+
+  # COVERH+
+  # #PRECIP+
+  # VIS+
+  #YEAR+
+  MONTH+
+  factor(DAY)+
+  factor(WEEKOFYEAR)
+
+fixed.dum <-lm(regression.time, data = train.data)
+validateAndPrintResultC(fixed.dum,test.data)
+
+summary(fixed.dum)
+plot(fixed.dum)
+fixed.time<- plm::plm(regression.time, 
+                      data = train.data, 
+                      model = "within")
+
+summary(fixed.time)
+random.time <- plm::plm(regression.time, 
+                  data=train.data, 
+                  model="random")
+# effect = c("individual",
+#   "time", "twoways", "nested")
+# model = c("within", "random", "ht",
+#   "between", "pooling", "fd")
+
+summary(fixed)
+#doesn't explain anything and has a very low r^2
+
 ```
 
 ```{r}
+# To decide between fixed or random effects you can run a Hausman test where the null hypothesis is that the preferred model is random effects vs. the alternative the fixed effects (see Green, 2008, chapter 9). It basically tests whether the unique errors are correlated with the regressors, the null hypothesis is they are not. If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
+
+#phtest(fixed, random)
+
+```
+
+#Classification Modeling
+
+```{r random sample of year}
+
+# years.list <- c(2014, 2015, 2016, 2017, 2018)
+# 
+# for (year in years.list) {
+#   set.seed(42)  # good idea to set the random seed for reproducibility
+#   temp.data <- model.data %>% filter(model.data$YEAR == year)
+#   temp.0.data <- temp.data %>% filter(temp.data$STRIKE == 0)
+#   temp.1.data <- temp.data %>% filter(temp.data$STRIKE == 1)
+#   sample.0.data <- stratified(temp.0.data, c('STRIKE'), 0.02)
+#   sample.1.data <- stratified(temp.1.data, c('STRIKE'), 0.4)
+#   sample.data <- rbind(sample.0.data, sample.1.data)
+#   if (year == 2014) {
+#     strikes.data <- sample.data
+#   }
+#   else{
+#     strikes.data <- bind_rows(strikes.data, sample.data)
+#   }
+# }
+# 
+# rm(temp.0.data, temp.1.data, temp.data, sample.0.data, sample.1.data, sample.data)
+
+#creating model.data.day to strikes.data
+
+strikes.data.day <- model.data.day %>% 
+  dplyr::select("STRIKE","WANGLE","WSPEED","TEMP","CLOUDH","COVER","COVERH","BIRDCOUNT","TOTAL","SLP","VIS","PRECIP","MONTH","DAY","WEEKOFYEAR")
+  
+
+head(model.data.day)
+```
 
 
-# To Do - remove the indexes and add in variable names
-runModel <- function(train.data, method.name) {
-  caret::train(
-    train.data[, c("WSPEED",
-                   "TEMP",
-                   "BIRDCOUNT",
-                   "TOTAL",
-                   "COVER",
-                   "RTIME",
-                   "MONTH", "YEAR", "WEEKOFDAY")],
-    train.data[, c("STRIKE")],
-    data = train.data,
-    tuneLength = 5,
-    method = method.name,
-    metric = 'ROC',
-    trControl = tc,
-    preProcess = c("center", "scale")
+```{r Random Forest Variable Importance}
+# Use Random Forest variable importance technique for variable selection
+# The below list has been tailored after multiple iterations
+fit <- randomForest::randomForest(
+  as.factor(STRIKE) ~ .,
+  data = strikes.data.day,
+  importance = TRUE,
+  proximity = FALSE
+)
+#importance(fit)
+
+varImp(fit)
+varImpPlot(fit, type = 2)
+importanceOrder = order(-fit$importance)
+
+names <- rownames(fit$importance)
+names
+```
+
+
+```{r Baruta}
+var.boruta <-
+  Boruta(
+    as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + TOTAL + SLP + VIS + PRECIP + MONTH + DAY + WEEKOFYEAR,
+    data = strikes.data.day
   )
-}
+print(var.boruta)
+plot(var.boruta, cex.axis = 0.8, las = 1)
+```
+
+
+```{r Train Control & Importance}
+# prepare training scheme
+control <- trainControl(method = "cv", number = 2)
+
+# train the model
+model <- train(STRIKE~., data = strikes.data.day, method = "lvq", preProcess = "scale", trControl = control)
+
+# estimate variable importance
+importance <- varImp(model, useModel = FALSE)
+
+# summarize importance
+print(importance)
+
+# plot importance
+plot(importance)
+```
+
+
+```{r VIF}
+set.seed(123)
+strikes.sample <-
+  strikes.data.day[, c(
+    "STRIKE",
+    "WANGLE",
+    "WSPEED",
+    "TEMP",
+    "COVER",
+    "BIRDCOUNT",
+    "TOTAL",
+    "SLP",
+    "VIS",
+    "PRECIP",
+    "CLOUDH",
+    "COVERH"
+  )]
+
+strikes.sample$STRIKE <- as.numeric(strikes.sample$STRIKE)
+
+# strikes.sample[, 2:12] <- scale(strikes.sample[, 2:12])
+
+fit <- glm(STRIKE ~ ., data = strikes.sample)
+VIF(fit, all.diagnostics = TRUE, plot = TRUE)
+
+#This function is a simple port of vif from the car package. The VIF of a predictor is a measure for how easily it is predicted from a linear regression using the other predictors. Taking the square root of the VIF tells you how much larger the standard error of the estimated coefficient is respect to the case when that predictor is independent of the other predictors.
 
 ```
 
 
-```{r message=FALSE, warning=FALSE}
+
+
+```{r nzv}
+# strikes.cat <-
+#   model.data[, c("RTIME", "MONTH", "WEEKOFDAY", "STRIKE")]
+# 
+# ### Ranking variables using penalized IV
+# info.val.data <-
+#   create_infotables(data = strikes.cat, y = as.numeric(strikes.cat$STRIKE), parallel = TRUE)
+# 
+# info.val = data.frame(info.val.data$Summary)
+# info.val.data$Summary
+
+nzv <- nearZeroVar(strikes.data.day, saveMetrics = TRUE)
+nzv[nzv[,"zeroVar"] > 0, ] # Check for zero variance predictors. None
+nzv[nzv[,"zeroVar"] + nzv[,"nzv"] > 0, ] # Check for near-zero variance predictors
+```
+
+
+```{r SMOTE over}
+# SMOTE oversampling for Classification 
+upsample.data <-
+  SMOTE(
+    STRIKE ~  WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER  + MONTH,
+    strikes.data.day,
+    perc.over = 2000,
+    k = 10
+  )
+
+upsample.data <- strikes.data.day %>% dplyr::select(STRIKE,
+                                                 WSPEED,
+                                                 TEMP,
+                                                 BIRDCOUNT,
+                                                 TOTAL,
+                                                 COVER,
+                                                 #RTIME,
+                                                 WEEKOFYEAR,
+                                                 MONTH)
+
+upsample.data <- upsample.data %>%
+  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
+
+describe(upsample.data)
+
+```
+
+```{r downsample}
+downsample.data <-
+  SMOTE(
+    STRIKE ~ WSPEED + TEMP + BIRDCOUNT + TOTAL + COVER + MONTH,
+    strikes.data.day, #confirm with krishna to see if this should be strieks or model
+    perc.under = 2900,
+    k = 10
+  )
+
+downsample.data <- strikes.data.day %>% dplyr::select(STRIKE,
+                                                 WSPEED,
+                                                 TEMP,
+                                                 BIRDCOUNT,
+                                                 TOTAL,
+                                                 COVER,
+                                                 #RTIME,
+                                                 WEEKOFYEAR,
+                                                 MONTH)
+
+downsample.data <- downsample.data %>%
+  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
+
+describe(downsample.data)
+
+```
+
+
+```{r create set up}
+# Create the training and test datasets
+set.seed(100)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.up <-
+  createDataPartition(upsample.data$STRIKE, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.up.data <- upsample.data[trainRowNumbers.up, ]
+
+# Step 3: Create the test dataset
+test.up.data <- upsample.data[-trainRowNumbers.up, ]
+
+```
+
+```{r create set down}
+# Create the training and test datasets
+set.seed(1234)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.dn <-
+  createDataPartition(downsample.data$STRIKE, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.dn.data <- downsample.data[trainRowNumbers.dn, ]
+
+# Step 3: Create the test dataset
+test.dn.data <- downsample.data[-trainRowNumbers.dn, ]
+
+```
+
+
+```{r 5 fold cv}
+
+# 5 Fold cross validation with Probabilities
+tc <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = TRUE,
+  verboseIter = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+
+```{r NB, up message=FALSE, warning=FALSE}
 
 # Fit Naive Bayes Model for upsampled data
 model.nb.up <- runModel(train.up.data, "nb")
@@ -461,7 +839,7 @@ validateAndPrintResult(model.nb.up, test.up.data)
 ```
 
 
-```{r message=FALSE, warning=FALSE}
+```{r np down, message=FALSE, warning=FALSE}
 # Fit Naive Bayes Model with downsampled data
 model.nb.down <- runModel(train.dn.data, "nb")
 
@@ -469,19 +847,22 @@ validateAndPrintResult(model.nb.down, test.dn.data)
 
 ```
 
-```{r}
+```{r Random Forest}
 # Fit Random Forest Model with upsampled data
 model.up.rf <- runModel(train.up.data, "rf")
 
 validateAndPrintResult(model.up.rf, test.up.data)
 ```
 
-```{r}
+```{r TP }
 # Fit Random Forest Model with down sampled data
 model.dn.rf <- runModel(train.dn.data, "rf")
 
 validateAndPrintResult(model.dn.rf, test.dn.data)
 ```
+
+
+
 
 ```{r}
 # Compare model performances using resample()
@@ -489,9 +870,11 @@ models_compare <-
   resamples(
     list(
       NB_UP = model.nb.up,
-      NB_DN = model.nb.down,
-      RF_UP = model.up.rf,
-      RF_DOWN = model.dn.rf
+      # NB_DN = model.nb.down,
+      RF_UP = model.up.rf
+      # RF_DOWN = model.dn.rf
+      # SVM_UP = model.up.svm,
+      # SVM_DN = model.dn.svm
     )
   )
 
@@ -506,22 +889,22 @@ scales <- list(x = list(relation = "free"),
 bwplot(models_compare, scales = 'free', layout = c(1,1))
 ```
 
+
 ```{r}
- 
-model.up.glm <-
+ model <-
   glm (
-    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
+    as.factor(STRIKE) ~  WSPEED + TEMP + COVER + TOTAL + MONTH,
     data = train.up.data,
     family = binomial
   )
-summary(model.up.glm)
+summary(model)
 ```
 ```{r}
 ## Predict the Values
-predict <- predict(model.up.glm, test.up.data, type = 'response')
+predict <- predict(model, test.up.data, type = 'response')
 
 ## Create Confusion Matrix
-table(test.up.data$STRIKE, predict > 0.1)
+table(test.up.data$STRIKE, predict > 0.009)
 
 # ROC Curve
 ROCRpred <- prediction(predict, test.up.data$STRIKE)
@@ -534,62 +917,19 @@ ROCRperf
 # confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
 # 
 # predicted.response
-summary(model.up.glm) # Summary of model
-cmLR <- table(predict>0.1, test.up.data$STRIKE)
+summary(model) # Summary of model
+cmLR <- table(predict>0.01, test.up.data$STRIKE)
 cmLR # Confusion matrix
 errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
 errorLR # error rate
 accuracyLR <- 100 - errorLR
 accuracyLR # accuracy rate
-precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
-precisionLR # precision
-recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
-recallLR # recall
-FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
-FscoreLR # F-score
+
+#Code doesn't work-- check with Krishna
+# precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
+# precisionLR # precision
+# recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
+# recallLR # recall
+# FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
+# FscoreLR # F-score
 ```
-
-```{r}
-model.dn.glm <-
-  glm (
-    as.factor(STRIKE) ~  WSPEED + COVER + TOTAL + RTIME + MONTH + YEAR + BIRDCOUNT + WEEKOFDAY,
-    data = train.dn.data,
-    family = binomial
-  )
-summary(model.dn.glm)
-
-```
-
-```{r}
-## Predict the Values
-predict <- predict(model.dn.glm, test.dn.data, type = 'response')
-
-## Create Confusion Matrix
-table(test.dn.data$STRIKE, predict > 0.1)
-
-# ROC Curve
-ROCRpred <- prediction(predict, test.dn.data$STRIKE)
-ROCRperf <- performance(ROCRpred, 'tpr','fpr')
-plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
-ROCRperf
-
-# # Predict using test data and generate confusion matrix
-# predicted.response <- predict(model, test.up.data, )
-# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
-# 
-# predicted.response
-summary(model.dn.glm) # Summary of model
-cmLR <- table(predict>0.1, test.dn.data$STRIKE)
-cmLR # Confusion matrix
-errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
-errorLR # error rate
-accuracyLR <- 100 - errorLR
-accuracyLR # accuracy rate
-precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
-precisionLR # precision
-recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
-recallLR # recall
-FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
-FscoreLR # F-score
-```
-
