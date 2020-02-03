@@ -355,7 +355,7 @@ print(importance)
 plot(importance)
 ```
 
-```{r}
+```{r H20 AutoMl Variable Selection}
 
 # Identify predictors and response
 y <- "STRIKE"
@@ -399,6 +399,21 @@ for (model_id in model_ids) {
  plot_features(explanation)
 
 ```
+
+
+```{r Classification Model Variable Selection}
+
+
+
+model.cla <- setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "WEEKOFYEAR", "CLOUDH"))
+
+model.cla <- model.data.day %>% select(model.cla)
+
+### Save the file
+saveRDS(model.cla,"KDEN_Class_Data.RDS")
+
+```
+
 
 
 ### Feature Selection for Regression Models
@@ -501,6 +516,7 @@ print(boruta.df)
 ```{r}
 # Fit a logistic regression model with stepwise AIC
 
+# This code takes a very long time to execute if WeekOfYear included
 glmStepAIC <-
   train(
     STRIKECOUNT ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + COVERH + CLOUDH + YEAR,
@@ -511,6 +527,38 @@ glmStepAIC <-
 summary(glmStepAIC)
 varImp(glmStepAIC)
 plot(varImp(glmStepAIC))
+```
+
+```{r Random Forest Variable Importance}
+# Use Random Forest variable importance technique for variable selection
+# The below list has been tailored after multiple iterations
+fit <- randomForest::randomForest(
+  STRIKECOUNT ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + YEAR,
+  data = model.data.day,
+  mtry = 3,
+  importance = TRUE,
+  proximity = TRUE,
+  do.trace = 100
+)
+print(fit)
+
+varImp(fit)
+randomForest::varImpPlot(fit, type = 2)
+importanceOrder = order(-fit$importance)
+
+varImp(fit)
+```
+
+
+```{r Regression Model Variable Selection}
+
+model.reg <- setdiff(names(model.data.day), c("STRIKE", "DAY", "WEEKOFYEAR", "PRECIP"))
+
+model.reg <- model.data.day %>% select(model.reg)
+
+### Save the file
+saveRDS(model.cla,"KDEN_Reg_Model.RDS")
+
 ```
 
 
