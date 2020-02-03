@@ -405,9 +405,9 @@ for (model_id in model_ids) {
 
 
 
-model.cla <- setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "WEEKOFYEAR", "CLOUDH"))
+model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "WEEKOFYEAR", "CLOUDH")))
 
-model.cla <- model.data.day %>% select(model.cla)
+model.cla <- model.data.day %>% dplyr::select(!!model.cla)
 
 ### Save the file
 saveRDS(model.cla,"KDEN_Class_Data.RDS")
@@ -552,12 +552,12 @@ varImp(fit)
 
 ```{r Regression Model Variable Selection}
 
-model.reg <- setdiff(names(model.data.day), c("STRIKE", "DAY", "WEEKOFYEAR", "PRECIP"))
+model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "DAY", "WEEKOFYEAR", "PRECIP")))
 
-model.reg <- model.data.day %>% select(model.reg)
+model.reg <- model.data.day %>% dplyr::select(!!model.reg)
 
 ### Save the file
-saveRDS(model.cla,"KDEN_Reg_Model.RDS")
+saveRDS(model.reg,"KDEN_Reg_Model.RDS")
 
 ```
 
