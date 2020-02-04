@@ -29,11 +29,15 @@ packages <- c(
   'tidyverse',
   'varrank',
   'corrplot',
+  'VIM',
   'glmnet',
   'AppliedPredictiveModeling',
   'h2o',
   'lime',
-  'DT'
+  'DT',
+  'zoo',
+  'RColorBrewer',
+  'mlbench'
 )
 
 # Checking for package installations on the system and installing if not found
@@ -117,8 +121,14 @@ model.data.day <- cbind(
   data.frame(
     YEAR = as.factor(format(model.data.day$DATE, format = "%Y")),
     MONTH = as.factor(format(model.data.day$DATE, format = "%m")),
-    DAY = as.factor(format(model.data.day$DATE, format = "%d")),
-    WEEKOFYEAR = as.factor(format(model.data.day$DATE, format = "%V"))
+    DAY = as.factor(format(model.data.day$DATE, format = "%A")),
+    SEASON = as.factor(factor(
+      format(as.yearqtr(
+        as.yearmon(model.data.day$DATE, "%m/%d/%Y") + 1 / 12
+      ), "%q"),
+      levels = 1:4,
+      labels = c("winter", "spring", "summer", "fall")
+    ))
   )
 )
 
@@ -134,6 +144,7 @@ model.data.day <-
 # Because of memory constraints considering only 2 years data
 model.data.day <-
   model.data.day %>% filter(!model.data.day$YEAR %in% c(2013, 2019))
+
 
 model.data.day <- model.data.day %>%
   mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
@@ -267,7 +278,7 @@ In the new correlation plot we obtained after removing the highly correlated fea
 # Use Random Forest variable importance technique for variable selection
 # The below list has been tailored after multiple iterations
 fit <- randomForest::randomForest(
-  as.factor(STRIKE) ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + YEAR + VIS + SLP + PRECIP,
+  as.factor(STRIKE) ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + YEAR + VIS + SLP + PRECIP + SEASON + DAY,
   data = model.data.day,
   mtry = 2,
   importance = TRUE,
@@ -302,7 +313,7 @@ varImp(fit)
 # Execute Boruta
 var.boruta <-
   Boruta(
-    as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + CLOUDH + COVERH + YEAR + DAY,
+    as.factor(STRIKE) ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + CLOUDH + COVERH + YEAR + DAY + SEASON,
     data = model.data.day,
     doTrace = 2
     )
@@ -329,37 +340,12 @@ print(boruta.df)
 
 Blue boxplots correspond to minimal, average and maximum Z score of a shadow attribute. Red, yellow and green boxplots represent Z scores of rejected, tentative and confirmed attributes respectively.
 
-### Variable Importance using Caret package
-
-```{r Train Control & Importance}
-# prepare training scheme
-control <- trainControl(method = "cv", number = 2)
-
-# train the model using Learning Vector Quantization (LVQ) model
-model <-
-  train(
-    as.factor(STRIKE) ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + YEAR + VIS + SLP + PRECIP + DAY,
-    data = model.data.day,
-    method = "lvq",
-    preProcess = "scale",
-    trControl = control
-  )
-
-# estimate variable importance
-importance <- varImp(model, useModel = FALSE)
-
-# summarize importance
-print(importance)
-
-# plot importance
-plot(importance)
-```
 
 ```{r H20 AutoMl Variable Selection}
 
 # Identify predictors and response
 y <- "STRIKE"
-x <- setdiff(names(model.data.day), c("STRIKE", "STRIKECOUNT", "COVERH", "SLP", "DAY", "WEEKOFYEAR", "CLOUDH"))
+x <- setdiff(names(model.data.day), c("STRIKE", "STRIKECOUNT", "DAY", "SEASON", "SLP", "COVERH", "CLOUDH"))
 
 # For binary classification, response should be a factor
 model.data.day[, y] <- as.factor(model.data.day[, y])
@@ -367,8 +353,9 @@ model.data.day[, y] <- as.factor(model.data.day[, y])
 # Run AutoML for 10 models
 aml <- h2o.automl(x = x, y = y,
                   training_frame = as.h2o(model.data.day),
-                  max_models = 10,
-                  seed = 123)
+                  max_models = 5,
+                  nfolds = 5,
+                  seed = 100)
 
 # View the AutoML Leaderboard
 lb <- aml@leaderboard
@@ -385,19 +372,6 @@ for (model_id in model_ids) {
   h2o.varimp_plot(m)
 }
 
-
- ## Train explainer
- explainer <- lime(model.data.day, aml)
-
- ## Get explanations for a subset of samples
- explanation <- explain(train[1:5, ], explainer, n_features = 10)
-
- ## Plot global explanations
- plot_explanations(explanation)
-
- ## Plot local explanations
- plot_features(explanation)
-
 ```
 
 
@@ -405,7 +379,7 @@ for (model_id in model_ids) {
 
 
 
-model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "WEEKOFYEAR", "CLOUDH")))
+model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "SEASON", "CLOUDH")))
 
 model.cla <- model.data.day %>% dplyr::select(!!model.cla)
 
@@ -482,10 +456,10 @@ VIF(fit, all.diagnostics = TRUE, plot = TRUE)
 
 var.boruta <-
   Boruta(
-    STRIKECOUNT ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + COVERH + CLOUDH + DAY + YEAR,
+    STRIKECOUNT ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + COVERH + CLOUDH + DAY + YEAR + SEASON,
     data = model.data.day,
     doTrace = 2
-    )
+  )
 
 # plot(var.boruta, cex.axis = 0.8, las = 1)
 
@@ -519,7 +493,7 @@ print(boruta.df)
 # This code takes a very long time to execute if WeekOfYear included
 glmStepAIC <-
   train(
-    STRIKECOUNT ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + COVERH + CLOUDH + YEAR,
+    STRIKECOUNT ~ WANGLE + WSPEED + TEMP + COVER + BIRDCOUNT + FLIGHTCOUNT + SLP + VIS + PRECIP + MONTH + COVERH + CLOUDH + YEAR + DAY + SEASON,
     data = model.data.day,
     method = "glmStepAIC",
     allowParallel = TRUE
@@ -533,7 +507,7 @@ plot(varImp(glmStepAIC))
 # Use Random Forest variable importance technique for variable selection
 # The below list has been tailored after multiple iterations
 fit <- randomForest::randomForest(
-  STRIKECOUNT ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + YEAR,
+  STRIKECOUNT ~ WSPEED + WANGLE + COVER + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + VIS + SLP + YEAR,
   data = model.data.day,
   mtry = 3,
   importance = TRUE,
@@ -552,7 +526,7 @@ varImp(fit)
 
 ```{r Regression Model Variable Selection}
 
-model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "DAY", "WEEKOFYEAR", "PRECIP")))
+model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "DAY", "PRECIP", "SEASON")))
 
 model.reg <- model.data.day %>% dplyr::select(!!model.reg)
 
