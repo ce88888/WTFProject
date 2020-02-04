@@ -1,0 +1,411 @@
+---
+title: "8 Classification Models"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'arm',
+  'boot',
+  'Boruta',
+  'car',
+  'caret',
+  'caTools',
+  'data.table',
+  'DMwR',
+  'dplyr',
+  'e1071',
+  'Information',
+  'klaR',
+  'leaps',
+  'lubridate',
+  'magrittr',
+  'MASS',
+  'mctest',
+  'mlbench',
+  'MLeval',
+  'pastecs',
+  'PerformanceAnalytics',
+  'pROC',
+  'proxy',
+  'pscl',
+  'psych',
+  'ranger',
+  'ROCR',
+  'Rtsne',
+  'scales',
+  'splitstackshape',
+  'tidyselect',
+  'tidyverse',
+  'varrank',
+  'VIM',
+  'zoo',
+  'corrplot',
+  'glmnet',
+  'doParallel',
+  'foreach',
+  'broom',
+  'DT',
+  'AppliedPredictiveModeling'
+)
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+# Initiate Parallel
+registerDoParallel(cores = 4)
+
+# Initiate h2o automl
+h2o.init()
+
+```
+
+```{r Model Data by Day}
+
+# Read Regression dataset from RDS
+class.data <- readRDS("KDEN_Class_Data.RDS")
+
+```
+
+```{r}
+class.formula <- STRIKE ~ FLIGHTCOUNT + BIRDCOUNT + TEMP + WANGLE + WSPEED  + COVER  + PRECIP + VIS #+ YEAR + MONTH
+```
+
+
+```{r}
+# Create the training and test datasets
+set.seed(100)
+
+class.data$STRIKE <- as.factor(class.data$STRIKE)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.cl <-
+  createDataPartition(class.data$STRIKE, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- class.data[trainRowNumbers.cl, ]
+
+# Step 3: Create the test dataset
+test.data <- class.data[-trainRowNumbers.cl, ]
+```
+
+```{r}
+validateAndPrintResult <- function(model, test.data) {
+  # Summarise Results
+  print(model)
+  
+  ## run MLeval
+  res <- evalm(model)
+  
+  # Predict on testData
+  predicted.resp <- predict(model, test.data)
+  head(predicted.resp)
+  
+  # Compute the confusion matrix
+  confusionMatrix(
+    reference = as.factor(test.data$STRIKE),
+    data = predicted.resp,
+    mode = 'everything',
+    positive = 'YES'
+  )
+}
+```
+
+```{r}
+# 5 Fold cross validation with Probabilities
+tc <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = TRUE,
+  verboseIter = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+```{r Elastic Net Classification Technique}
+
+train.data.factors <-
+  model.matrix(
+    as.factor(train.data$STRIKE) ~ train.data$MONTH + train.data$YEAR
+  )[, -1]
+
+model.train.data       <-
+  as.matrix(
+    data.frame(
+      train.data$WSPEED,
+      train.data$WANGLE,
+      train.data$COVER,
+      train.data$BIRDCOUNT,
+      train.data$FLIGHTCOUNT,
+      train.data$TEMP,
+      # train.data$PRECIP,
+      # train.data$VIS,
+      train.data.factors
+    )
+  )
+
+test.data.factors <-
+  model.matrix(
+    as.factor(test.data$STRIKE) ~ test.data$MONTH + test.data$YEAR
+  )[, -1]
+
+model.test.data       <-
+  as.matrix(
+    data.frame(
+      test.data$WSPEED,
+      test.data$WANGLE,
+      test.data$COVER,
+      test.data$BIRDCOUNT,
+      test.data$FLIGHTCOUNT,
+      test.data$TEMP,
+      # test.data$PRECIP,
+      # test.data$VIS,
+      test.data.factors
+    )
+  )
+
+# # Note alpha=1 for lasso only and can blend with ridge penalty down to
+# # alpha=0 ridge only.
+glmmod <- glmnet( model.train.data,
+      as.factor(train.data$STRIKE),, alpha=1, family="binomial")
+
+# Plot variable coefficients vs. shrinkage parameter lambda.
+plot(glmmod, label=TRUE)
+coef(glmmod)
+print(glmmod)
+
+# ELASTIC NET WITH 0 < ALPHA < 1
+a <- seq(0.1, 0.9, 0.05)
+search <- foreach(i = a, .combine = rbind) %dopar% {
+  cv <-
+    cv.glmnet(
+      model.train.data,
+      as.factor(train.data$STRIKE),
+      family = "binomial",
+      nfold = 10,
+      type.measure = "deviance",
+      paralle = TRUE,
+      alpha = i
+    )
+  data.frame(
+    cvm = cv$cvm[cv$lambda == cv$lambda.1se],
+    lambda.1se = cv$lambda.1se,
+    alpha = i
+  )
+}
+plot(search$lambda.1se)
+cv3 <- search[search$cvm == min(search$cvm), ]
+md3 <-
+  glmnet(
+    model.train.data,
+    as.factor(train.data$STRIKE),
+    family = "binomial",
+    lambda = cv3$lambda.1se,
+    alpha = cv3$alpha
+  )
+coef(md3)
+
+roc(as.factor(test.data$STRIKE), predict(md3, model.test.data, type = "response"))
+
+preds <- predict(md3, model.test.data, type = "response")
+
+# Calculate true positive rate and false positive rate on the prediction object
+perf <- performance(prediction(preds, test.data$STRIKE), 'tpr', 'fpr')
+
+plot(perf)
+```
+
+```{r}
+model <-
+  glm (
+    class.formula,
+    data = train.data,
+    family = binomial
+  )
+summary(model)
+```
+
+```{r}
+## Predict the Values
+predict <- predict(model, test.data, type = 'response')
+
+## Create Confusion Matrix
+table(test.data$STRIKE, predict > 0.009)
+
+# ROC Curve
+ROCRpred <- prediction(predict, test.data$STRIKE)
+ROCRperf <- performance(ROCRpred, 'tpr','fpr')
+plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
+ROCRperf
+
+# # Predict using test data and generate confusion matrix
+# predicted.response <- predict(model, test.up.data, )
+# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
+# 
+# predicted.response
+summary(model) # Summary of model
+cmLR <- table(predict>0.01, test.data$STRIKE)
+cmLR # Confusion matrix
+errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
+errorLR # error rate
+accuracyLR <- 100 - errorLR
+accuracyLR # accuracy rate
+
+#Code doesn't work-- check with Krishna
+# precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2]) 
+# precisionLR # precision
+# recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2]) 
+# recallLR # recall
+# FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
+# FscoreLR # F-score
+```
+
+
+```{r}
+# all others may have just failed and are not listed here
+models.cla <- c("knn", "AdaBoost.M1", "rf")
+
+# register parallel front-end
+cl.cla <- makeCluster(detectCores())
+registerDoParallel(cl.cla)
+
+# this setup actually calls the caret::train function, in order to provide
+# minimal error handling this type of construct is needed.
+trainCall <- function(i)
+{
+  cat("----------------------------------------------------",
+      "\n")
+  
+  set.seed(123)
+  cat(i, " <- loaded\n")
+  
+  t2 <-
+    train(
+      train.data[, c("WSPEED",
+                        "TEMP",
+                        "BIRDCOUNT",
+                        "FLIGHTCOUNT",
+                        "COVER",
+                        "MONTH")],
+      train.data[,c('STRIKE')],
+      # data = train.cl.data,
+      method = i,
+      trControl = trainControl(
+        method = "boot632",
+        number = 5
+        # allowParallel = TRUE,
+        # verboseIter = TRUE
+        
+      )
+      # maxdepth = 10,
+      # nu = 0.1
+      # iter = 50
+      # preProcess="scale",
+      # na.action = na.omit()
+    )
+}
+
+# use lapply/loop to run everything, required for try/catch error function to work
+t2 <- lapply(models.cla, trainCall)
+
+#remove NULL values, we only allow succesful methods, provenance is deleted.
+t2 <- t2[!sapply(t2, is.null)]
+
+# this setup extracts the results with minimal error handling 
+# TrainKappa can be sometimes zero, but Accuracy SD can be still available
+printCall <- function(i)
+{
+  return(tryCatch({
+    cat(sprintf("%-22s", (models.cla[i])))
+    cat(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4), "\t")
+    cat(round(getTrainPerf(t2[[i]])$TrainKappa, 4), "\t")
+    cat(t2[[i]]$times$everything[3], "\n")
+  },
+  error = function(e)
+    NULL))
+}
+	
+r2 <- lapply(1:length(t2), printCall)
+
+# stop cluster and register sequntial front end
+stopCluster(cl.cla)
+registerDoSEQ()
+
+
+# preallocate data types
+i = 1; MAX = length(t2);
+x1 <- character() # Name
+x2 <- numeric()   # R2
+x3 <- numeric()   # RMSE
+x4 <- numeric()   # time [s]
+x5 <- character() # long model name
+ 
+# fill data and check indexes and NA with loop/lapply
+for (i in 1:length(t2)) {
+  x1[i] <- t2[[i]]$method
+  x2[i] <-
+    as.numeric(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4))
+  x3[i] <- as.numeric(round(getTrainPerf(t2[[i]])$TrainKappa, 4))
+  x4[i] <- as.numeric(t2[[i]]$times$everything[3])
+  x5[i] <- t2[[i]]$modelInfo$label
+}
+  
+# coerce to data frame
+df1 <- data.frame(x1, x2, x3, x4, x5, stringsAsFactors = FALSE)
+
+# print all results to R-GUI
+df1
+
+# plot models, just as example
+# ggplot(t2[[1]])
+# ggplot(t2[[1]])
+
+# call web output with correct column names
+datatable(
+  df1,
+  options = list(
+    columnDefs = list(list(
+      className = 'dt-left', targets = c(0, 1, 2, 3, 4, 5)
+    )),
+    pageLength = MAX,
+    order = list(list(2, 'desc'))
+  ),
+  colnames = c('Num', 'Name', 'Accuracy', 'Kappa', 'time [s]', 'Model name'),
+  caption = paste('Classification results from caret models', Sys.time()),
+  class = 'cell-border stripe'
+)  %>%
+  formatRound('x2', 3) %>%
+  formatRound('x3', 3) %>%
+  formatRound('x4', 3) %>%
+  formatStyle(
+    2,
+    background = styleColorBar(x2, 'steelblue'),
+    backgroundSize = '100% 90%',
+    backgroundRepeat = 'no-repeat',
+    backgroundPosition = 'center'
+  )
+
+# print confusion matrix example
+caret::confusionMatrix(t2[[1]])
+```
+
