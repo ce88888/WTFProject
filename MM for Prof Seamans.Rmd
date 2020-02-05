@@ -1,0 +1,142 @@
+---
+title: "for Prof Seamans"
+author: "Christian Endter"
+date: "03/02/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(MASS)
+library(gbm)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(pscl)
+library(lme4)
+library(glmmTMB)
+library(dataPreparation)
+library(gbm)
+library(caret)
+library(ROCR)
+library(performanceEstimation)
+library(rpart)
+library(e1071)
+# library(ResourceSelection)
+
+
+```
+
+```{r Data set preparation}
+data <- readRDS("KDEN model data all flights.RDS")
+
+
+### Set 1: Base data (adjust time filter as needed)
+### - every line corresponds to a single flight with STRIKE = 1/0
+d <- data %>% dplyr::filter(year(DATE) %in% 2014:2018) %>%
+    mutate(WEEK = as.factor(isoweek(DATE)),
+           MONTH = as.factor(month(DATE)))
+
+### Set 2: Data aggregated by hour
+### - every line corresponds to a particular hour on a date with STRIKES = num strikes, and STRIKE = 1/0
+d_day_hour <- d %>%
+  group_by(`AIRPORT ID`,DATE,RTIME) %>%
+  summarise(`FLTS TOTAL` = first(`TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
+  mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+# d_day_hour$WEEK <- as.factor(d_day_hour$WEEK)
+# d_day_hour$MONTH<- as.factor(d_day_hour$MONTH)
+
+### Set 3: Data aggregated by day
+### - every line correspondes to a particular date with STRIKES = num strikes, and STRIKE = 1/0
+d_day <- d_day_hour %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`FLTS TOTAL` = sum(`FLTS TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
+  mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+### Quick - look
+### Heavily unbalanced base set
+# table(d$STRIKE)
+
+
+### High zero counts
+# table(d_day_hour$STRIKES)
+# table(d_day$STRIKES)
+
+# df <- d_day
+# table(df$STRIKES)
+# train_indicator <- createDataPartition(df$STRIKES, p = 0.8, list = FALSE)
+# dfTrain <- df[train_indicator,]
+# dfTest <- df[-train_indicator,]
+```
+
+### Histograms / distribution - Birdcounts (across 2014 - 2018)
+Binwidth = 200, upper limit 10,000 birds per day.  
+
+```{r}
+
+ggplot(d_day[d_day$BIRDCOUNT<10000,], aes(x=BIRDCOUNT, fill=as.factor(STRIKE))) +
+  geom_histogram(binwidth = 200) + 
+  scale_color_manual(values = c("#E69F11","#56B4E8"))
+
+```
+
+### Plot of strikes for buckets up to 15,000 birds/day  
+
+Note, not all days with strikes have bird observations (only showing days with strikes and bird observations as no observation does not mean zero birds).  
+Breakpoints: 0,1,10,25,50,75,99, 100 to 2000 in 100 steps, 2001,3000,4000,5000,10000,15000)
+```{r}
+day_birdgroup <- transform(d_day, group=cut(d_day$BIRDCOUNT,c(-1,0,1,10,25,50,75,99, seq(100,2000,by=100),2001,3000,4000,5000,10000,15000)))
+
+day_birdgroup_table <- group_by(day_birdgroup, group) %>% summarise(STRIKES = sum(STRIKE), N = n(),MEAN=mean(STRIKE, na.rm=T))
+
+plot(day_birdgroup_table$group,day_birdgroup_table$MEAN)
+day_birdgroup_table
+```
+
+### Distribution of strikes
+```{r}
+table(d_day$STRIKES)
+ggplot(d_day, aes(x=d_day$STRIKES)) + geom_histogram(binwidth = 1)
+```
+
+
+```{r Logistic - Month dummies}
+# # Scaling - N(0,1), needed for mixed effects estimation as otherwise seems to have numeric issues
+# scales <- build_scales(dfTrain, cols = c("FLTS TOTAL","BIRDCOUNT","TEMP","SLP","WIND ANGLE", "WIND SPEED", "CLOUDH","COVERH","VIS","PRECIP"))
+# dfTrainS <- fastScale(dfTrain,scales)
+# 
+# glmL <- glm(STRIKE ~ 
+#               `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+#               `WIND SPEED` + COVERH + VIS + PRECIP + MONTH + 
+#               VIS*`WIND SPEED`,
+#                 data=dfTrainS, family=binomial, na.action=na.exclude)
+# summary(glmL)
+```
+```{r Logistic / Mixed Model with Month as random effect (intercept), width=9}
+
+# glmLME <- glmer(STRIKE ~ 
+#               `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+#               `WIND SPEED` + COVERH + VIS + PRECIP + (1|MONTH) + 
+#               VIS*`WIND SPEED`,
+#                 data=dfTrainS, family=binomial)
+# summary(glmLME)
+
+```

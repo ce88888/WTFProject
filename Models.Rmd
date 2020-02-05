@@ -21,6 +21,9 @@ library(dataPreparation)
 library(gbm)
 library(caret)
 library(ROCR)
+library(performanceEstimation)
+library(rpart)
+library(e1071)
 # library(ResourceSelection)
 
 
@@ -33,7 +36,7 @@ data <- readRDS("KDEN model data all flights.RDS")
 
 ### Set 1: Base data (adjust time filter as needed)
 ### - every line corresponds to a single flight with STRIKE = 1/0
-d <- data %>% dplyr::filter(year(DATE) %in% 2014:2018) %>%
+d <- data %>% dplyr::filter(year(DATE) %in% 2010:2018) %>%
     mutate(WEEK = as.factor(isoweek(DATE)), 
            MONTH = as.factor(month(DATE)))
   
@@ -41,12 +44,13 @@ d <- data %>% dplyr::filter(year(DATE) %in% 2014:2018) %>%
 ### - every line corresponds to a particular hour on a date with STRIKES = num strikes, and STRIKE = 1/0
 d_day_hour <- d %>%
   group_by(`AIRPORT ID`,DATE,RTIME) %>%
-  summarise(`FLTS TOTAL` = first(`FLTS TOTAL`), STRIKES = sum(STRIKE),
+  summarise(`FLTS TOTAL` = first(`TOTAL`), STRIKES = sum(STRIKE),
             BIRDCOUNT = first(BIRDCOUNT),
             TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
             `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
             CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
-            VIS = mean(VIS, na.rm=T)) %>%
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
   mutate(STRIKE = ifelse(STRIKES>0,1,0),
          WEEK = factor(isoweek(DATE), levels=1:53),
          MONTH = factor(month(DATE), levels=1:12))
@@ -63,7 +67,8 @@ d_day <- d_day_hour %>%
             TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
             `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
             CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
-            VIS = mean(VIS, na.rm=T)) %>%
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
   mutate(STRIKE = ifelse(STRIKES>0,1,0),
          WEEK = factor(isoweek(DATE), levels=1:53),
          MONTH = factor(month(DATE), levels=1:12))
@@ -72,9 +77,225 @@ d_day <- d_day_hour %>%
 ### Heavily unbalanced base set
 table(d$STRIKE)
 
-### Heavily zeroinflated counts
-table(d_day_hour$STRIKES)
-table(d_day$STRIKES)
+### High zero counts
+# table(d_day_hour$STRIKES)
+# table(d_day$STRIKES)
+
+```
+
+```{r Logistic - Month dummies}
+# Scaling - N(0,1), needed for mixed effects estimation as otherwise seems to have numeric issues
+scales <- build_scales(dfTrain, cols = c("FLTS TOTAL","BIRDCOUNT","TEMP","SLP","WIND ANGLE", "WIND SPEED", "CLOUDH","COVERH","VIS","PRECIP"))
+dfTrainS <- fastScale(dfTrain,scales)
+
+glmL <- glm(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + MONTH + 
+              VIS*`WIND SPEED`,
+                data=dfTrainS, family=binomial, na.action=na.exclude)
+summary(glmL)
+
+ggplot(dfTrain, aes(STRIKES,TEMP)) + geom_point()
+
+
+```
+
+
+```{r Logistic / Mixed Model with Month as random effect (intercept)}
+
+glmLME <- glmer(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + (1|MONTH) + 
+              VIS*`WIND SPEED`,
+                data=dfTrainS, family=binomial)
+summary(glmLME)
+
+```
+
+
+
+```{r Poisson/NB}
+df <- d_day
+table(df$STRIKES)
+train_indicator <- createDataPartition(df$STRIKES, p = 0.8, list = FALSE)
+dfTrain <- df[train_indicator,]
+dfTest <- df[-train_indicator,]
+
+### Threshold for logistic regression
+log_threshold <- 0.5
+
+glmL <- glm(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP + MONTH + 
+              VIS*`WIND SPEED`,
+                data=dfTrain, family=binomial, na.action=na.exclude)
+summary(glmL)
+
+dfTrain$P <- predict(glmL,data=dfTrain,type="response",na.action = na.exclude)
+dfTrain$LOGIT <- log(dfTrain$P/(1-dfTrain$P))
+
+dx <- pivot_longer(dfTrain,c(`FLTS TOTAL`, BIRDCOUNT, TEMP , SLP , `WIND ANGLE` , 
+              `WIND SPEED` , CLOUDH , COVERH , VIS , PRECIP),names_to="predictors", values_to="predictor.value")
+
+ggplot(dx, aes(LOGIT,(predictor.value))) +
+  geom_point(size=0.5, alpha=0.2)+
+  geom_smooth(method="loess")+
+  theme_bw()+facet_wrap(~predictors, scales="free_y")
+
+ggplot(dfTrain, aes(COVERH,STRIKE)) + geom_point() + facet_wrap(~MONTH)
+
+scales <- build_scales(dfTrain, cols = c("FLTS TOTAL","BIRDCOUNT","TEMP","SLP","WIND ANGLE", "WIND SPEED", "CLOUDH","COVERH","VIS","PRECIP"))
+dfTrainS <- fastScale(dfTrain,scales)
+glmLME <- glmer(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + (1|MONTH) + 
+              VIS*`WIND SPEED`,
+                data=dfTrainS, family=binomial)
+summary(glmLME)
+
+dfTest <- dfTest %>%
+  mutate(P = predict(glmL,dfTest,type="response"),
+         PRED = ifelse(P >= log_threshold,1,0),
+         ACC = ifelse(STRIKE==PRED,TRUE,FALSE)) 
+
+p <- predict(glmL, dfTest, type="response")
+pr <- prediction(p, dfTest$STRIKE)
+prf <- performance(pr,measure="tpr", x.measure="fpr")
+plot(prf)
+performance(pr, measure="auc")
+
+glmNB <- glm.nb(STRIKES ~ 
+                  `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+                  `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP,
+                data=dfTrain)
+summary(glmNB)
+
+glmP <- glm(STRIKES ~ 
+                  `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+                  `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP + MONTH,
+            data=dfTrain, family=poisson)
+summary(glmP)
+```
+```{r}
+# daily probability
+df$PACT <- df$STRIKES/df$`FLTS TOTAL`
+
+# daily probability across months
+ggplot(df, aes(MONTH, PACT)) + geom_boxplot()
+
+# daily P modelled directly
+glmLp <- glm(PACT ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP + MONTH + 
+              VIS*`WIND SPEED`,
+             data=df, 
+             weights = `FLTS TOTAL`, family=binomial, na.action=na.exclude)
+summary(glmLp)
+
+df$PPRED <- predict(glmLp,df,type="response")
+df$PPRED <- round(df$PPRED,5)
+df$DELTA <- df$PACT-df$PPRED
+
+ggplot(df, aes(log(COVERH),PACT)) + geom_point() + facet_wrap(~MONTH)
+
+hm <- hurdle(STRIKES ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+              `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP +
+              VIS*`WIND SPEED`, data = dfTrainS, dist = "negbin", zero.dist="binomial")
+summary(hm)
+```
+
+```{r VISUAL NALYSIS}
+# Flight numbers over time
+flights <- ggplot(df, aes(MONTH, `FLTS TOTAL`)) + geom_boxplot()
+
+# Weather
+temp <- ggplot(df, aes(MONTH, TEMP/10)) + geom_boxplot()
+vis <- ggplot(df, aes(MONTH, VIS)) + geom_boxplot()
+coverh <- ggplot(df,aes(MONTH, COVERH)) + geom_boxplot()
+
+grid.arrange(flights,temp,vis, coverh, ncol=2)
+
+dff <- d_day_hour
+
+ggplot(dff, aes(VIS,STRIKES)) + geom_point() + facet_wrap(~MONTH)
+
+#average characteristics of strike days
+x <- dff %>% group_by(STRIKE, MONTH) %>% summarise(TEMP = mean(TEMP, na.rm = T),
+                                       VIS = mean(VIS, na.rm = T),
+                                       COVERH = mean(COVERH, na.rm=T))
+ggplot(dff, aes(STRIKE,COVERH, group=STRIKE)) + geom_boxplot() + facet_wrap(~MONTH) 
+```
+```{r SVM}
+make.grid = function(x, n = 75) {
+  grange = apply(x, 2, range)
+  x1 = seq(from = grange[1,1], to = grange[2,1], length = n)
+  x2 = seq(from = grange[1,2], to = grange[2,2], length = n)
+  expand.grid(X1 = x1, X2 = x2)
+}
+
+dsvm <- dplyr::select(dfTrainS, STRIKE, VIS,CLOUDH) %>% ungroup()
+
+
+ggplot(dsvm, aes(x=(VIS),y=(CLOUDH),colour=STRIKE)) + geom_point()
+svmm <- svm(STRIKE ~ ., kernel="polynomial", cost=10, data = dsvm, na.action=na.exclude, scale=FALSE)
+plot(svmm,dsvm)
+plopred <- predict(svmm,dfTrain)
+plot(dfTrain$STRIKE,pred)
+summary(svmm)
+plot.svm(svmm)
+```
+
+
+
+```{r}
+
+#ds <- dplyr::filter(d_day_hour,year(DATE) %in% 2014:2018)
+
+# balance the data set
+table(d_day_hour$STRIKE)
+# SMOTE oversampling for Classification 
+upsample.data <-
+  smote(
+    STRIKE ~ .,
+    d_day_hour,
+    perc.over = 5600,
+    k = 10
+  )
+
+upsample.data <- upsample.data %>%
+  mutate(STRIKE = ifelse(STRIKE == 0, "NO", "YES"))
+
+
+# split the data
+trainyn <- createDataPartition(d_day_hour$STRIKE,p=0.8,list=FALSE)
+dtrain <- d_day_hour[trainyn,]
+dtest <- d_day_hour[-trainyn,]
+
+# control = trainControl(
+#   method = 'cv',
+#   number = 10,
+#   classProbs = TRUE,
+#   summaryFunction = twoClassSummary
+# )
+# 
+# xgb <- train(STRIKE ~ `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+#             `WIND SPEED` + SLP + CLOUDH + COVERH + VIS + MONTH,
+#              data = dtrain,
+#              method = "xgbTree",
+#              metric = "Sens",
+#              trControl = control
+# )
+
+tm <- rpart(STRIKE ~ `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+            `WIND SPEED` + SLP + CLOUDH + COVERH + VIS + MONTH, data=dtrain)
+pred = predict(tm, type="class")
+
+gm <- gbm(STRIKE ~ `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+            `WIND SPEED` + SLP + CLOUDH + COVERH + VIS + MONTH, 
+          data=dtrain, n.trees = 1000)
+
+confusionMatrix(predict(gm, dtest, n.trees=1000), dtest$STRIKE)
 ```
 
 
