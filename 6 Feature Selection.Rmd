@@ -345,7 +345,7 @@ Blue boxplots correspond to minimal, average and maximum Z score of a shadow att
 
 # Identify predictors and response
 y <- "STRIKE"
-x <- setdiff(names(model.data.day), c("STRIKE", "STRIKECOUNT", "DAY", "SEASON", "SLP", "COVERH", "CLOUDH"))
+x <- setdiff(names(model.data.day), c("STRIKE", "STRIKECOUNT", "YEAR", "DAY", "SEASON"))
 
 # For binary classification, response should be a factor
 model.data.day[, y] <- as.factor(model.data.day[, y])
@@ -353,7 +353,7 @@ model.data.day[, y] <- as.factor(model.data.day[, y])
 # Run AutoML for 10 models
 aml <- h2o.automl(x = x, y = y,
                   training_frame = as.h2o(model.data.day),
-                  max_models = 5,
+                  max_models = 10,
                   nfolds = 5,
                   seed = 100)
 
@@ -379,7 +379,7 @@ for (model_id in model_ids) {
 
 
 
-model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "COVERH", "SLP", "DAY", "SEASON", "CLOUDH")))
+model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT")))
 
 model.cla <- model.data.day %>% dplyr::select(!!model.cla)
 
@@ -526,7 +526,7 @@ varImp(fit)
 
 ```{r Regression Model Variable Selection}
 
-model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "DAY", "PRECIP", "SEASON")))
+model.reg <- c(setdiff(names(model.data.day), c("STRIKE")))
 
 model.reg <- model.data.day %>% dplyr::select(!!model.reg)
 
