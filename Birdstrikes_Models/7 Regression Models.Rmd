@@ -1,0 +1,413 @@
+---
+title: "7 Regression Models"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'arm',
+  'boot',
+  'Boruta',
+  'car',
+  'caret',
+  'caTools',
+  'data.table',
+  'DMwR',
+  'dplyr',
+  'e1071',
+  'Information',
+  'klaR',
+  'leaps',
+  'lubridate',
+  'magrittr',
+  'MASS',
+  'mctest',
+  'mlbench',
+  'MLeval',
+  'pastecs',
+  'PerformanceAnalytics',
+  'pROC',
+  'proxy',
+  'pscl',
+  'psych',
+  'ranger',
+  'ROCR',
+  'Rtsne',
+  'scales',
+  'splitstackshape',
+  'tidyselect',
+  'tidyverse',
+  'varrank',
+  'VIM',
+  'zoo',
+  'corrplot',
+  'glmnet',
+  'doParallel',
+  'foreach',
+  'broom',
+  'DT',
+  'AppliedPredictiveModeling'
+)
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+# Initiate Parallel
+registerDoParallel(cores = 4)
+
+# Initiate h2o automl
+h2o.init()
+
+```
+
+```{r Model Data by Day}
+
+# Read Regression dataset from RDS
+reg.data <- readRDS("KDEN_Reg_Model.RDS")
+
+```
+
+```{r Validate Function}
+validateAndPrintResultC <- function(model, test.data) {
+  # Summarise Results
+  print(model)
+  summary(model)
+  model$finalModel
+  
+  # Predict on testData
+  predicted.resp <- round(predict(model, test.data))
+  
+  # head(predicted.resp)
+  compare <- test.data %>%
+    dplyr::select("YEAR", "MONTH", "STRIKECOUNT")
+  
+  compare <- cbind(compare, predicted.resp)
+  compare$accuracy <-
+    ifelse(compare$STRIKECOUNT == compare$predicted.resp, TRUE, FALSE)
+  acc <- filter(compare, accuracy == TRUE, predicted.resp != 0)
+  false <- filter(compare, accuracy == FALSE)
+  print(table(compare$accuracy))
+  print(acc)
+  print(false)
+  
+  
+  
+}
+```
+
+```{r Test Train Splits}
+
+# Create the training and test datasets
+set.seed(500)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers <-
+  createDataPartition(reg.data$STRIKECOUNT, p = 0.8, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- reg.data[trainRowNumbers, ]
+
+# Step 3: Create the test dataset
+test.data <- reg.data[-trainRowNumbers, ]
+
+```
+
+```{r}
+reg.formula <-
+  STRIKECOUNT ~  FLIGHTCOUNT + BIRDCOUNT + TEMP + WANGLE + WSPEED + COVER  + VIS + YEAR + MONTH #+ CLOUDH + COVERH + SLP 
+
+train_control <- trainControl(method="cv", number=5)
+
+```
+
+
+```{r Regression Model}
+########### General Model ########### 
+modelglm <- train(reg.formula,
+                  data=train.data,
+                  method="glm" ,
+                  trControl = train_control)
+
+validateAndPrintResultC(modelglm,test.data)
+
+plot(caret::varImp(modelglm))
+
+########### Results ########### 
+
+# 584 samples
+#  11 predictor
+# 
+# No pre-processing
+# Resampling: Cross-Validated (5 fold) 
+# Summary of sample sizes: 468, 468, 467, 467, 466 
+# Resampling results:
+# 
+#   RMSE       Rsquared    MAE      
+#   0.6766016  0.03640392  0.4935009
+# 
+# prediction from a rank-deficient fit may be misleading
+# FALSE  TRUE 
+#    54    91 
+
+# 8 Accurate predicted Flights
+
+```
+
+```{r Random Forest Regressor}
+model.rf <- train(
+  reg.formula,
+  data = train.data,
+  method = "rf" ,
+  trControl = trainControl(
+    method = "cv",
+    number = 5,
+    allowParallel = TRUE
+  ),
+  tuneLength = 2
+)
+
+validateAndPrintResultC(model.rf, test.data)
+
+plot(caret::varImp(model.rf))
+
+
+test.data$PREDICTED <- round(predict(model.rf, newdata = test.data))
+
+```
+
+
+```{r Negative Binomial}
+#Negative Binomial
+# modelglm.nb <- glm.nb(reg.formula,
+#                       data = train.data,
+#                       link = "sqrt",
+#                       method = "glm.fit")
+# 
+# validateAndPrintResultC(modelglm.nb,test.data)
+# 
+# plot(modelglm.nb)
+
+model.glm.nb <- train(reg.formula,
+                  data=train.data,
+                  method="glm.nb" ,
+                  trControl = trainControl(method = "cv", number=10, allowParallel = TRUE),
+                  tuneLength = 5)
+
+validateAndPrintResultC(model.glm.nb,test.data)
+
+plot(caret::varImp(model.glm.nb))
+
+test.data$PREDICTED <- round(predict(model.glm.nb, newdata = test.data))
+
+########### Results ########### 
+# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
+# Null Deviance:	    1318 
+# Residual Deviance: 1109 	AIC: 2295
+# 
+# FALSE  TRUE 
+#   207   156 
+########### Failed Code ########### 
+
+## want to try the NEGBINOMAIL with CAROT -- DOESN"T WORK
+# train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+# 
+# modelglm.nb <- train(STRIKECOUNT~
+#                        FLIGHTCOUNT+
+#                         #STRIKE+
+#                         BIRDCOUNT+
+#                         TEMP+
+#                         #SLP+
+#                         WANGLE+
+#                         WSPEED+
+#                         #COVER+
+#                         CLOUDH+
+#                         COVERH+
+#                         #PRECIP+
+#                         VIS,
+#                         #YEAR+
+#                         #MONTH+
+#                         #DAY+
+#                         #WEEKOFYEAR,
+#                   data=train.data,
+#                   method="glm.nb" ,
+#                   trControl = trainControl(method = "boot"),
+#                   link="sqrt",
+#                   trace =TRUE,
+#                   maxit = 10)
+# validateAndPrintResultC(modelglm.nb,test.data)
+
+```
+
+```{r Quasi Poisson}
+##QuasiPosson
+modelQPos <- glm(reg.formula,
+                 data = train.data, quasipoisson)
+
+validateAndPrintResultC(modelQPos,test.data)
+
+plot(modelQPos)
+
+#Looks Promising 
+
+```
+
+```{r ols}
+ols <- lm(reg.formula, data = train.data)
+validateAndPrintResultC(ols, test.data)
+plot(ols)
+
+```
+
+```{r Fixed Effects-- DOESN't WORK}
+regression.time <- reg.formula
+
+fixed.dum <- lm(regression.time, data = train.data)
+validateAndPrintResultC(fixed.dum, test.data)
+
+summary(fixed.dum)
+plot(fixed.dum)
+fixed.time <- plm::plm(regression.time,
+                       data = train.data,
+                       model = "within")
+
+summary(fixed.time)
+random.time <- plm::plm(regression.time,
+                        data = train.data,
+                        model = "random")
+# effect = c("individual",
+#   "time", "twoways", "nested")
+# model = c("within", "random", "ht",
+#   "between", "pooling", "fd")
+
+summary(fixed)
+#doesn't explain anything and has a very low r^2
+
+```
+
+
+```{r}
+# To decide between fixed or random effects you can run a Hausman test where the null hypothesis is that the preferred model is random effects vs. the alternative the fixed effects (see Green, 2008, chapter 9). It basically tests whether the unique errors are correlated with the regressors, the null hypothesis is they are not. If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
+
+#phtest(fixed, random)
+
+```
+
+
+```{r}
+models.reg <- c( "glm", "lm","glmnet", "glm.nb", "glmboost", "bayesglm", "rf")
+
+# register parallel front-end
+cl.reg <- makeCluster(4)
+
+registerDoParallel(cl.reg)
+
+# use lapply/loop to run everything
+reg.train <- lapply(models.reg, function(i)
+{
+  cat("----------------------------------------------------",
+      "\n")
+  
+  set.seed(123)
+  cat(i, " <- loaded\n")
+  
+  tr <-
+    train(
+      reg.formula,
+      train.data,
+      method = i,
+      trControl = trainControl(
+        method = "cv",
+        number = 5,
+        verboseIter = TRUE,
+        allowParallel = TRUE
+      ),
+      tuneLength = 5
+    )
+})
+
+
+r2 <- lapply(1:length(reg.train), function(i)
+{
+  cat(sprintf("%-20s", (models.reg[i])))
+
+  cat(round(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
+
+  cat(round(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
+  cat(reg.train[[i]]$times$everything[3], "\n")
+})
+
+# stop cluster and register sequntial front end
+stopCluster(cl.reg)
+
+registerDoSEQ()
+
+
+# preallocate data types
+i = 1
+MAX = length(reg.train)
+
+Name <- character() # Name
+R2 <- numeric()   # R2
+RMSE <- numeric()   # RMSE
+MAE  <- numeric()   # MAE
+Time <- numeric()   # time [s]
+ModelName <- character() # long model name
+
+# fill data and check indexes and NA
+for (i in 1:length(reg.train)) {
+  Name[i] <- reg.train[[i]]$method
+  R2[i] <-
+    as.numeric(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)])
+  RMSE[i] <-
+    as.numeric(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)])
+  MAE[i] <-
+    as.numeric(reg.train[[i]]$results$MAE[which.min(reg.train[[i]]$results$MAE)])
+  Time[i] <- as.numeric(reg.train[[i]]$times$everything[3])
+  ModelName[i] <- reg.train[[i]]$modelInfo$label
+}
+
+# coerce to data frame
+results <- data.frame(Name, R2, RMSE, MAE, Time, ModelName, stringsAsFactors = FALSE)
+
+# call web output with correct column names
+datatable(
+  results,
+  options = list(columnDefs = list(list(
+    className = 'dt-left', targets = c(5, 4, 3, 2, 1, 0)
+  )),
+  pageLength = MAX,
+  order = list(list(2, 'desc'))),
+  caption = paste('Regression results from caret models', Sys.time()),
+  class = 'cell-border stripe'
+)  %>%
+  formatRound('R2', 5) %>%
+  formatRound('RMSE', 5) %>%
+  formatRound('MAE', 5) %>%
+  formatRound('Time', 5) %>%
+  formatStyle(
+    2,
+    background = styleColorBar(R2, 'steelblue'),
+    backgroundSize = '100% 90%',
+    backgroundRepeat = 'no-repeat',
+    backgroundPosition = 'center'
+  )
+```
