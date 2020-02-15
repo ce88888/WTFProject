@@ -38,56 +38,56 @@ for(package in packages){
 
 
 ```{r}
-weather <- read_excel("Weather.xls")
-
-weather$DATE <- ymd(weather$DATE)
-
-weather[2:11] <- sapply(weather[2:11], as.numeric)
-
-weather[12:17] <- lapply(weather[12:17], factor)
-
-### Save the file
-saveRDS(weather,"KDEN_Weather_New.RDS")
+# weather <- read_excel("Weather.xls")
+# 
+# weather$DATE <- ymd(weather$DATE)
+# 
+# weather[2:11] <- sapply(weather[2:11], as.numeric)
+# 
+# weather[12:17] <- lapply(weather[12:17], factor)
+# 
+# ### Save the file
+# saveRDS(weather,"KDEN_Weather_New.RDS")
 
 ```
 
 ```{r}
-birdcount <- read_csv("birdCount_1992_2019.csv")
-
-birdcount <- birdcount %>% filter(milesFromAirport < 10)
-
-birdcount$obsDt <- as.Date(birdcount$obsDt, format = "%m/%d/%y")
-
-birdcount <-
-  birdcount %>% group_by(obsDt) %>% summarise(BIRDCOUNT = sum(howMany))
-
-birdcount$BIRDCOUNT[is.na(birdcount$BIRDCOUNT)] <- 0
-
-birdcount <-
-  birdcount %>% dplyr::rename(DATE = obsDt)
-
-### Save the file
-saveRDS(birdcount,"KDEN_BirdCount_New.RDS")
+# birdcount <- read_csv("birdCount_1992_2019.csv")
+# 
+# birdcount <- birdcount %>% filter(milesFromAirport < 10)
+# 
+# birdcount$obsDt <- as.Date(birdcount$obsDt, format = "%m/%d/%y")
+# 
+# birdcount <-
+#   birdcount %>% group_by(obsDt) %>% summarise(BIRDCOUNT = sum(howMany))
+# 
+# birdcount$BIRDCOUNT[is.na(birdcount$BIRDCOUNT)] <- 0
+# 
+# birdcount <-
+#   birdcount %>% dplyr::rename(DATE = obsDt)
+# 
+# ### Save the file
+# saveRDS(birdcount,"KDEN_BirdCount_New.RDS")
 ```
 
 ```{r}
-faa <- read_xlsx("Strikes_02132020.xlsx")
-
-faa['STRIKE'] <- 1
-
-faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
-
-faa <- faa %>% filter(HEIGHT <= 2000)
-
-faa <- faa %>% group_by(INCIDENT_DATE, STRIKE) %>% summarise(STRIKECOUNT = sum(STRIKE))
-
-faa$DATE <- as.Date(faa$DATE, '%Y-%m-%d')
-
-faa <-
-  faa %>% dplyr::rename(DATE = INCIDENT_DATE)
-
-### Save the file
-saveRDS(birdcount,"KDEN_Faa_New.RDS")
+# faa <- read_xlsx("Strikes_02132020.xlsx")
+# 
+# faa['STRIKE'] <- 1
+# 
+# faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
+# 
+# faa <- faa %>% filter(HEIGHT <= 2000)
+# 
+# faa <- faa %>% group_by(INCIDENT_DATE, STRIKE) %>% summarise(STRIKECOUNT = sum(STRIKE))
+# 
+# faa$DATE <- as.Date(faa$DATE, '%Y-%m-%d')
+# 
+# faa <-
+#   faa %>% dplyr::rename(DATE = INCIDENT_DATE)
+# 
+# ### Save the file
+# saveRDS(birdcount,"KDEN_Faa_New.RDS")
 
 ```
 

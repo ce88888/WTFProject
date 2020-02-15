@@ -474,7 +474,7 @@ varImp(fit)
 
 ```{r Regression Model Variable Selection}
 
-model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "DATE", "YEAR", "HAIL", "DAYOFYEAR", "FOG", "SNOW_ICE", "RAIN_DRIZZLE", "THUNDER")))
+model.reg <- c(setdiff(names(model.data.day), c("STRIKE", "HAIL", "DAYOFYEAR", "FOG", "SNOW_ICE", "RAIN_DRIZZLE", "THUNDER")))
 
 model.reg <- model.data.day %>% dplyr::select(!!model.reg)
 
