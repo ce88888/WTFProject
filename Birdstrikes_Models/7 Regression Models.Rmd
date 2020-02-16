@@ -58,6 +58,7 @@ packages <- c(
   'foreach',
   'broom',
   'DT',
+  'h2o',
   'AppliedPredictiveModeling'
 )
 
@@ -82,36 +83,36 @@ h2o.init()
 ```{r Model Data by Day}
 
 # Read Regression dataset from RDS
-reg.data <- readRDS("KDEN_Reg_Model.RDS")
+reg.data <- readRDS("KDEN_Reg_Model_New.RDS")
 
-```
+# Reorder data frame by Date 
+reg.data <- reg.data[order(reg.data$DATE), ]
 
-```{r Validate Function}
-validateAndPrintResultC <- function(model, test.data) {
-  # Summarise Results
-  print(model)
-  summary(model)
-  model$finalModel
-  
-  # Predict on testData
-  predicted.resp <- round(predict(model, test.data))
-  
-  # head(predicted.resp)
-  compare <- test.data %>%
-    dplyr::select("YEAR", "MONTH", "STRIKECOUNT")
-  
-  compare <- cbind(compare, predicted.resp)
-  compare$accuracy <-
-    ifelse(compare$STRIKECOUNT == compare$predicted.resp, TRUE, FALSE)
-  acc <- filter(compare, accuracy == TRUE, predicted.resp != 0)
-  false <- filter(compare, accuracy == FALSE)
-  print(table(compare$accuracy))
-  print(acc)
-  print(false)
-  
-  
-  
-}
+# reg.data$STRIKECOUNT_LAG_1 <- lag(reg.data$STRIKECOUNT, k =  1)
+
+reg.data$PRCP_LAG_1 <- lag(reg.data$PRCP, k = 1)
+
+reg.data$TEMP_LAG_1 <- lag(reg.data$TEMP, k = 1)
+
+reg.data <- reg.data[complete.cases(reg.data), ]
+
+reg.data <-
+  reg.data[!(
+    reg.data$SLP == 9999.9 |
+      reg.data$MXSPD == 999.9 |
+      reg.data$PRCP == 99.99 | reg.data$PRCP_LAG_1 == 99.99
+  ),]
+
+valid.data <-
+  reg.data[(reg.data$YEAR == 2019), ]
+
+reg.data <-
+  reg.data %>% filter(!reg.data$YEAR %in% c(1995, 1996, 1997, 1998, 1999, 2019))
+
+reg.data <- subset(reg.data, select = -c(DATE))
+
+valid.data <- subset(valid.data, select = -c(DATE))
+
 ```
 
 ```{r Test Train Splits}
@@ -121,7 +122,7 @@ set.seed(500)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers <-
-  createDataPartition(reg.data$STRIKECOUNT, p = 0.8, list = FALSE)
+  createDataPartition(reg.data$STRIKECOUNT, p = 0.75, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.data <- reg.data[trainRowNumbers, ]
@@ -133,281 +134,604 @@ test.data <- reg.data[-trainRowNumbers, ]
 
 ```{r}
 reg.formula <-
-  STRIKECOUNT ~  FLIGHTCOUNT + BIRDCOUNT + TEMP + WANGLE + WSPEED + COVER  + VIS + YEAR + MONTH #+ CLOUDH + COVERH + SLP 
-
-train_control <- trainControl(method="cv", number=5)
+  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + DEWP + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT + MONTH + DAYOFWEEK
 
 ```
 
 
-```{r Regression Model}
-########### General Model ########### 
-modelglm <- train(reg.formula,
-                  data=train.data,
-                  method="glm" ,
-                  trControl = train_control)
+```{r}
 
-validateAndPrintResultC(modelglm,test.data)
-
-plot(caret::varImp(modelglm))
-
-########### Results ########### 
-
-# 584 samples
-#  11 predictor
-# 
-# No pre-processing
-# Resampling: Cross-Validated (5 fold) 
-# Summary of sample sizes: 468, 468, 467, 467, 466 
-# Resampling results:
-# 
-#   RMSE       Rsquared    MAE      
-#   0.6766016  0.03640392  0.4935009
-# 
-# prediction from a rank-deficient fit may be misleading
-# FALSE  TRUE 
-#    54    91 
-
-# 8 Accurate predicted Flights
+model.metrics <-
+  data.frame(
+    "Model_Name" = character(0),
+    "Data_Type" = character(0),
+    "RMSE" = numeric(0),
+    "MAE" = numeric(0),
+    "Normalized_MSE" = numeric(0),
+    "Normalized_MAE" = numeric(0),
+    stringsAsFactors = FALSE
+  )
 
 ```
+
+```{r}
+
+saveModelMetrics <-
+  function(model.predictions,
+           data,
+           model.name,
+           data.type) {
+    # rmse
+    rmse <-
+      round(sqrt(mean((data$STRIKECOUNT - model.predictions) ^ 2
+      )), 3)
+    
+    # Mean Absolute Error (MAE) - average absolute deviation between the predictions and the true values
+    mae <-
+      round(mean(abs(
+        data$STRIKECOUNT - model.predictions
+      )), 3)
+    
+    # Normalized Mean Squared Error (NMSE)
+    nmse <-
+      round(sum((
+        data$STRIKECOUNT - model.predictions
+      ) ^ 2) / sum((
+        data$STRIKECOUNT - mean(data$STRIKECOUNT)
+      ) ^ 2), 3)
+    
+    #Normalized Mean Absolute Error (NMAE)
+    nmae <-
+      round(sum(abs(
+        data$STRIKECOUNT - model.predictions
+      )) / sum(abs(
+        data$STRIKECOUNT - mean(data$STRIKECOUNT)
+      )), 3)
+    
+    # combine all the above validation metrics
+    model.summary <-
+      c(model.name,
+        data.type,
+        rmse,
+        mae,
+        nmse,
+        nmae)
+    
+    return(model.summary)
+  }
+
+```
+
+
+
+```{r Validate Model Function}
+validate.models <- function(model, model.predictions, data, model.name) {
+  
+  check.data <- data
+  
+  # actual vs predicted graph
+  validate <- data.frame(data$STRIKECOUNT, model.predictions, round(model.predictions))
+  
+  check.data <- cbind(check.data, validate)
+  
+  names(validate) <- c("actual", "predicted", "rounded_predicted")
+  
+  # decile predictions
+  validate$bucket <-
+    with(validate,
+         cut(
+           predicted,
+           breaks = quantile(predicted, probs = seq.int(0, 1, 0.1)),
+           include.lowest = TRUE,
+           labels = c(1:10)
+         ))
+  
+  
+  plot(
+    validate$rounded_predicted,
+    validate$actual,
+    xlab = "Predicted",
+    ylab = "Actual",
+    main = paste("Predicted vs Actual for ", model.name),
+    col = c("red", "blue"),
+    pch = 20
+  )
+  abline(0, 1, col = "darkorange", lwd = 2)
+  legend(
+    "topleft",
+    c("Actual", "Predicted"),
+    col = c("red", "blue"),
+    lwd = c(1.5, 1.5),
+    bty = "n",
+    cex = 0.8
+  )
+  
+  # average values of actual and predicted by decile
+  validate <-
+    aggregate(validate[, c("actual", "predicted")], by = list(validate$bucket), FUN = mean)
+  
+  print(validate)
+  
+  # plot
+  plot(
+    validate$predicted,
+    col = "red",
+    type = "l",
+    lwd = 1.5,
+    ylab = "STRIKE COUNT",
+    xlab = "Predicted Decile",
+    main = paste("Predicted vs Actual by Deciles for ", model.name)
+  )
+  lines(validate$actual, col = "blue", lwd = 1.5)
+  legend(
+    "topleft",
+    c("Actual", "Predicted"),
+    col = c("blue", "red"),
+    lwd = c(1.5, 1.5),
+    bty = "n",
+    cex = 0.8
+  )
+  
+  return(check.data)
+}
+```
+
+```{r Linear Regression}
+# Linear Regression
+
+model.name <- "Linear Regression"
+rm(check.data, check.test.data, check.valid.data)
+
+model.lm <- train(
+  reg.formula,
+  data = train.data,
+  method = "lm" ,
+  metric = "RMSE",
+  trControl = trainControl(
+    method = "cv",
+    number = 10,
+    allowParallel = TRUE
+  ),
+  tuneLength = 5
+)
+
+summary(model.lm)
+
+# predict on test data
+model.predictions <- predict(model.lm, test.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+
+check.test.data <-
+  validate.models(model.lm, model.predictions, test.data, model.name)
+
+model.predictions <- predict(model.lm, valid.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, valid.data, model.name, "Validation Data")
+
+check.valid.data <-
+  validate.models(model.lm, model.predictions, valid.data, model.name)
+
+```
+
+```{r Negative Binomial}
+# Negative Binomial Regression
+
+model.name <- "Negative Binomial"
+rm(check.data, check.test.data, check.valid.data)
+
+grid <- expand.grid(link = "log")
+
+model.glm.nb <- train(
+  reg.formula,
+  data = train.data,
+  method = "glm.nb" ,
+  metric = "RMSE",
+  trControl = trainControl(
+    method = "cv",
+    number = 10,
+    allowParallel = TRUE
+  ),
+  tuneLength = 5,
+  tuneGrid = grid
+)
+
+summary(model.glm.nb)
+
+# predict on test data
+model.predictions <- predict(model.glm.nb, test.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1,] <-
+  saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+
+check.test.data <-
+    validate.models(model.glm.nb, model.predictions, test.data, model.name)
+
+model.predictions <- predict(model.glm.nb, valid.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1,] <-
+  saveModelMetrics(model.predictions, valid.data, model.name, "Validation Data")
+
+check.valid.data <-
+    validate.models(model.glm.nb, model.predictions, valid.data, model.name)
+
+```
+
+
 
 ```{r Random Forest Regressor}
+# Random Forest
+
+model.name <- "Random Forest"
+rm(check.data, check.test.data, check.valid.data)
+
+mtry <- sqrt(ncol(train.data))
+grid <- expand.grid(.mtry = mtry)
+
 model.rf <- train(
   reg.formula,
   data = train.data,
   method = "rf" ,
+  metric="RMSE",
   trControl = trainControl(
     method = "cv",
     number = 5,
     allowParallel = TRUE
   ),
-  tuneLength = 2
+  tuneLength = 5,
+  tunegrid = grid
 )
 
-validateAndPrintResultC(model.rf, test.data)
+model.rf
 
-plot(caret::varImp(model.rf))
+summary(model.rf)
+
+# predict on test data
+model.predictions <- predict(model.rf, test.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+
+check.test.data <-
+  validate.models(model.rf, model.predictions, test.data, model.name)
+
+model.predictions <- predict(model.rf, valid.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, valid.data, model.name, "Validation Data")
+
+check.valid.data <-
+  validate.models(model.rf, model.predictions, valid.data, model.name)
+
+```
+
+```{r SVM Regression}
+# Random Forest
+
+model.name <- "SVM Linear Regressor"
+rm(check.data, check.test.data, check.valid.data)
+
+model.svm <- train(
+  reg.formula,
+  data = train.data,
+  method = "svmLinear2" ,
+  metric="RMSE",
+  trControl = trainControl(
+    method = "cv",
+    number = 5,
+    allowParallel = TRUE
+  ),
+  tuneLength = 5,
+  tunegrid = data.frame(cost = c(.25, .5, 1))
+)
+
+model.svm
+
+summary(model.svm)
 
 
-test.data$PREDICTED <- round(predict(model.rf, newdata = test.data))
+# predict on test data
+model.predictions <- predict(model.svm, test.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+
+check.test.data <-
+  validate.models(model.svm, model.predictions, test.data, model.name)
+
+model.predictions <- predict(model.svm, valid.data, type = "raw")
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions, valid.data, model.name, "Validation Data")
+
+check.valid.data <-
+  validate.models(model.svm, model.predictions, valid.data, model.name)
 
 ```
 
 
-```{r Negative Binomial}
-#Negative Binomial
-# modelglm.nb <- glm.nb(reg.formula,
-#                       data = train.data,
-#                       link = "sqrt",
-#                       method = "glm.fit")
+```{r XGBoost Regressor}
+
+# model.name <- "XGBoost Regressor"
+# rm(check.data, check.test.data, check.valid.data)
 # 
-# validateAndPrintResultC(modelglm.nb,test.data)
+# xgb.data <- rbind(reg.data, valid.data)
 # 
-# plot(modelglm.nb)
-
-model.glm.nb <- train(reg.formula,
-                  data=train.data,
-                  method="glm.nb" ,
-                  trControl = trainControl(method = "cv", number=10, allowParallel = TRUE),
-                  tuneLength = 5)
-
-validateAndPrintResultC(model.glm.nb,test.data)
-
-plot(caret::varImp(model.glm.nb))
-
-test.data$PREDICTED <- round(predict(model.glm.nb, newdata = test.data))
-
-########### Results ########### 
-# Degrees of Freedom: 1458 Total (i.e. Null);  1357 Residual
-# Null Deviance:	    1318 
-# Residual Deviance: 1109 	AIC: 2295
+# # one-hot-encoding categorical features
+# ohe_feats = c('MONTH', 'DAYOFWEEK', 'SEASON')
 # 
-# FALSE  TRUE 
-#   207   156 
-########### Failed Code ########### 
-
-## want to try the NEGBINOMAIL with CAROT -- DOESN"T WORK
-# train_control <- trainControl(method="repeatedcv", number=3, repeats=2)
+# # Create dummies
+# dummies <- dummyVars(~ MONTH + DAYOFWEEK +  SEASON, data = xgb.data)
 # 
-# modelglm.nb <- train(STRIKECOUNT~
-#                        FLIGHTCOUNT+
-#                         #STRIKE+
-#                         BIRDCOUNT+
-#                         TEMP+
-#                         #SLP+
-#                         WANGLE+
-#                         WSPEED+
-#                         #COVER+
-#                         CLOUDH+
-#                         COVERH+
-#                         #PRECIP+
-#                         VIS,
-#                         #YEAR+
-#                         #MONTH+
-#                         #DAY+
-#                         #WEEKOFYEAR,
-#                   data=train.data,
-#                   method="glm.nb" ,
-#                   trControl = trainControl(method = "boot"),
-#                   link="sqrt",
-#                   trace =TRUE,
-#                   maxit = 10)
-# validateAndPrintResultC(modelglm.nb,test.data)
-
-```
-
-```{r Quasi Poisson}
-##QuasiPosson
-modelQPos <- glm(reg.formula,
-                 data = train.data, quasipoisson)
-
-validateAndPrintResultC(modelQPos,test.data)
-
-plot(modelQPos)
-
-#Looks Promising 
-
-```
-
-```{r ols}
-ols <- lm(reg.formula, data = train.data)
-validateAndPrintResultC(ols, test.data)
-plot(ols)
-
-```
-
-```{r Fixed Effects-- DOESN't WORK}
-regression.time <- reg.formula
-
-fixed.dum <- lm(regression.time, data = train.data)
-validateAndPrintResultC(fixed.dum, test.data)
-
-summary(fixed.dum)
-plot(fixed.dum)
-fixed.time <- plm::plm(regression.time,
-                       data = train.data,
-                       model = "within")
-
-summary(fixed.time)
-random.time <- plm::plm(regression.time,
-                        data = train.data,
-                        model = "random")
-# effect = c("individual",
-#   "time", "twoways", "nested")
-# model = c("within", "random", "ht",
-#   "between", "pooling", "fd")
-
-summary(fixed)
-#doesn't explain anything and has a very low r^2
+# df.dummies <- as.data.frame(predict(dummies, newdata = xgb.data))
+# 
+# # Merge Dummies to data frame
+# xgb.data <-
+#   cbind(xgb.data[, -c(which(colnames(xgb.data) %in% ohe_feats))], df.dummies)
+# 
+# xgb.valid.data <-
+#   xgb.data[(xgb.data$YEAR == 2019), ]
+# 
+# xgb.data <-
+#   xgb.data %>% filter(!xgb.data$YEAR %in% c(2019))
+# 
+# xgb.data <- xgb.data %>% select(-c(YEAR))
+# 
+# xgb.valid.data <- xgb.valid.data %>% select(-c(YEAR))
+# 
+# # Create the training and test datasets
+# set.seed(1234)
+# 
+# # Step 1: Get row numbers for the training data
+# trainRowNumbers <-
+#   createDataPartition(xgb.data$STRIKECOUNT, p = 0.75, list = FALSE)
+# 
+# # Step 2: Create the training  dataset
+# train.data <- xgb.data[trainRowNumbers, ]
+# 
+# # Step 3: Create the test dataset
+# test.data <- xgb.data[-trainRowNumbers, ]
+# 
+# 
+# trcontrol.xgb = trainControl(
+#   method = "cv",
+#   number = 5,  
+#   allowParallel = TRUE,
+#   verboseIter = TRUE,
+#   returnData = TRUE
+# )
+# 
+# xgbGrid <-
+#   expand.grid(
+#     nrounds = c(100, 200),
+#     max_depth = c(10, 15, 20, 25),
+#     colsample_bytree = seq(0.1, 0.9, length.out = 5),
+#     eta = 0.1,
+#     gamma = 0,
+#     min_child_weight = 1,
+#     subsample = 1
+#   )
+# 
+# model.xgb = train(
+#    STRIKECOUNT ~  .,
+#   data = train.data,
+#   trControl = trcontrol.xgb,
+#   tuneGrid = xgbGrid,
+#   method = "xgbTree"
+# )
+# 
+# model.xgb$bestTune
+# 
+# model.xgb
+# 
+# # # predict on test data
+# # model.predictions <- round(predict(model.xgb, test.data))
+# # 
+# # model.metrics[nrow(model.metrics) + 1,] <-
+# #   saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+# # 
+# # check.test.data <-
+# #   validate.models(model.xgb, model.predictions, test.data, model.name)
+# 
+# model.predictions <- predict(model.xgb, xgb.valid.data)
+# 
+# model.metrics[nrow(model.metrics) + 1, ] <-
+#   saveModelMetrics(model.predictions,
+#                    xgb.valid.data,
+#                    model.name,
+#                    "Validation Data")
+# 
+# check.valid.data <-
+#   validate.models(model.xgb, model.predictions, xgb.valid.data, model.name)
 
 ```
 
 
 ```{r}
-# To decide between fixed or random effects you can run a Hausman test where the null hypothesis is that the preferred model is random effects vs. the alternative the fixed effects (see Green, 2008, chapter 9). It basically tests whether the unique errors are correlated with the regressors, the null hypothesis is they are not. If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
-
-#phtest(fixed, random)
-
-```
-
-
-```{r}
-models.reg <- c( "glm", "lm","glmnet", "glm.nb", "glmboost", "bayesglm", "rf")
-
-# register parallel front-end
-cl.reg <- makeCluster(4)
-
-registerDoParallel(cl.reg)
-
-# use lapply/loop to run everything
-reg.train <- lapply(models.reg, function(i)
-{
-  cat("----------------------------------------------------",
-      "\n")
-  
-  set.seed(123)
-  cat(i, " <- loaded\n")
-  
-  tr <-
-    train(
-      reg.formula,
-      train.data,
-      method = i,
-      trControl = trainControl(
-        method = "cv",
-        number = 5,
-        verboseIter = TRUE,
-        allowParallel = TRUE
-      ),
-      tuneLength = 5
-    )
-})
-
-
-r2 <- lapply(1:length(reg.train), function(i)
-{
-  cat(sprintf("%-20s", (models.reg[i])))
-
-  cat(round(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
-
-  cat(round(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
-  cat(reg.train[[i]]$times$everything[3], "\n")
-})
-
-# stop cluster and register sequntial front end
-stopCluster(cl.reg)
-
-registerDoSEQ()
-
-
-# preallocate data types
-i = 1
-MAX = length(reg.train)
-
-Name <- character() # Name
-R2 <- numeric()   # R2
-RMSE <- numeric()   # RMSE
-MAE  <- numeric()   # MAE
-Time <- numeric()   # time [s]
-ModelName <- character() # long model name
-
-# fill data and check indexes and NA
-for (i in 1:length(reg.train)) {
-  Name[i] <- reg.train[[i]]$method
-  R2[i] <-
-    as.numeric(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)])
-  RMSE[i] <-
-    as.numeric(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)])
-  MAE[i] <-
-    as.numeric(reg.train[[i]]$results$MAE[which.min(reg.train[[i]]$results$MAE)])
-  Time[i] <- as.numeric(reg.train[[i]]$times$everything[3])
-  ModelName[i] <- reg.train[[i]]$modelInfo$label
-}
-
-# coerce to data frame
-results <- data.frame(Name, R2, RMSE, MAE, Time, ModelName, stringsAsFactors = FALSE)
-
-# call web output with correct column names
+# # call web output with correct column names
 datatable(
-  results,
+  model.metrics,
   options = list(columnDefs = list(list(
     className = 'dt-left', targets = c(5, 4, 3, 2, 1, 0)
   )),
-  pageLength = MAX,
+  pageLength = length(model.metrics),
   order = list(list(2, 'desc'))),
   caption = paste('Regression results from caret models', Sys.time()),
   class = 'cell-border stripe'
-)  %>%
-  formatRound('R2', 5) %>%
-  formatRound('RMSE', 5) %>%
-  formatRound('MAE', 5) %>%
-  formatRound('Time', 5) %>%
-  formatStyle(
-    2,
-    background = styleColorBar(R2, 'steelblue'),
-    backgroundSize = '100% 90%',
-    backgroundRepeat = 'no-repeat',
-    backgroundPosition = 'center'
-  )
+) 
 ```
+
+
+
+```{r}
+# models.reg <- c( "glm", "lm","glmnet", "glmboost", "bayesglm", "rf")
+# 
+# # register parallel front-end
+# cl.reg <- makeCluster(4)
+# 
+# registerDoParallel(cl.reg)
+# 
+# # use lapply/loop to run everything
+# reg.train <- lapply(models.reg, function(i)
+# {
+#   cat("----------------------------------------------------",
+#       "\n")
+#   
+#   set.seed(123)
+#   cat(i, " <- loaded\n")
+#   
+#   tr <-
+#     train(
+#       reg.formula,
+#       train.data,
+#       method = i,
+#       trControl = trainControl(
+#         method = "cv",
+#         number = 5,
+#         verboseIter = TRUE,
+#         allowParallel = TRUE
+#       ),
+#       tuneLength = 5
+#     )
+# })
+# 
+# 
+# r2 <- lapply(1:length(reg.train), function(i)
+# {
+#   cat(sprintf("%-20s", (models.reg[i])))
+# 
+#   cat(round(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
+# 
+#   cat(round(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)], 4), "\t")
+#   cat(reg.train[[i]]$times$everything[3], "\n")
+# })
+# 
+# # stop cluster and register sequntial front end
+# stopCluster(cl.reg)
+# 
+# registerDoSEQ()
+# 
+# 
+# # preallocate data types
+# i = 1
+# MAX = length(reg.train)
+# 
+# Name <- character() # Name
+# R2 <- numeric()   # R2
+# RMSE <- numeric()   # RMSE
+# MAE  <- numeric()   # MAE
+# Time <- numeric()   # time [s]
+# ModelName <- character() # long model name
+# 
+# # fill data and check indexes and NA
+# for (i in 1:length(reg.train)) {
+#   Name[i] <- reg.train[[i]]$method
+#   R2[i] <-
+#     as.numeric(reg.train[[i]]$results$Rsquared[which.min(reg.train[[i]]$results$RMSE)])
+#   RMSE[i] <-
+#     as.numeric(reg.train[[i]]$results$RMSE[which.min(reg.train[[i]]$results$RMSE)])
+#   MAE[i] <-
+#     as.numeric(reg.train[[i]]$results$MAE[which.min(reg.train[[i]]$results$MAE)])
+#   Time[i] <- as.numeric(reg.train[[i]]$times$everything[3])
+#   ModelName[i] <- reg.train[[i]]$modelInfo$label
+# }
+# 
+# # coerce to data frame
+# results <- data.frame(Name, R2, RMSE, MAE, Time, ModelName, stringsAsFactors = FALSE)
+# 
+# # call web output with correct column names
+# datatable(
+#   results,
+#   options = list(columnDefs = list(list(
+#     className = 'dt-left', targets = c(5, 4, 3, 2, 1, 0)
+#   )),
+#   pageLength = MAX,
+#   order = list(list(2, 'desc'))),
+#   caption = paste('Regression results from caret models', Sys.time()),
+#   class = 'cell-border stripe'
+# )  %>%
+#   formatRound('R2', 5) %>%
+#   formatRound('RMSE', 5) %>%
+#   formatRound('MAE', 5) %>%
+#   formatRound('Time', 5) %>%
+#   formatStyle(
+#     2,
+#     background = styleColorBar(R2, 'steelblue'),
+#     backgroundSize = '100% 90%',
+#     backgroundRepeat = 'no-repeat',
+#     backgroundPosition = 'center'
+#   )
+```
+
+```{r}
+# h2o.data <- reg.data
+# 
+# h2o.data <- h2o.data %>% select(FLIGHTCOUNT,  TEMP, PRCP, VISIB, SEASON, DEWP, SLP, WDSP, STRIKECOUNT, TEMP_LAG_1, PRCP_LAG_1)
+# 
+# # Create the training and test datasets
+# set.seed(100)
+# 
+# # Step 1: Get row numbers for the training data
+# trainRowNumbers.cl <-
+#   createDataPartition(h2o.data$STRIKECOUNT, p = 0.75, list = FALSE)
+# 
+# # Step 2: Create the training  dataset
+# train.data <- h2o.data[trainRowNumbers.cl, ]
+# 
+# # Step 3: Create the test dataset
+# test.data <- h2o.data[-trainRowNumbers.cl, ]
+# 
+# train.data <- as.h2o(train.data)
+# test.data <- as.h2o(test.data)
+# 
+# # Identify predictors and response
+# y <- "STRIKECOUNT"
+# x <- setdiff(names(h2o.data), c("STRIKECOUNT"))
+# 
+# # For binary classification, response should be a factor
+# # train.data[,y] <- as.factor(train.data[,y])
+# # test.data[,y] <- as.factor(test.data[,y])
+# 
+# # Number of CV folds (to generate level-one data for stacking)
+# nfolds <- 5
+```
+
+
+```{r}
+# # Use AutoML to find a list of candidate models (i.e., leaderboard)
+# auto_ml <- h2o.automl(
+#   x = x,
+#   y = y,
+#   training_frame = train.data,
+#   nfolds = 5,
+#   max_runtime_secs = 60 * 120,
+#   max_models = 10,
+#   keep_cross_validation_predictions = TRUE,
+#   sort_metric = "rmse",
+#   seed = 123,
+#   stopping_rounds = 50,
+#   stopping_metric = "rmse",
+#   stopping_tolerance = 0
+# )
+# 
+# # Assess the leader board; the following truncates the results to show the top 
+# # and bottom 15 models. You can get the top model with auto_ml@leader
+# auto_ml@leaderboard %>% 
+#   as.data.frame() %>%
+#   dplyr::select(model_id, rmse)
+# 
+# 
+# pred <- as.data.frame(h2o.predict(auto_ml, test.data))
+# 
+# # test.data <- cbind(test.data, pred$predict)
+# # 
+# # test.data <- as.data.frame(test.data)
+
+```
+
+```{r}
+
+```
+

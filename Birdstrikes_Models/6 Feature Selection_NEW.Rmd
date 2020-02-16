@@ -329,7 +329,7 @@ for (model_id in model_ids) {
 
 
 
-model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "YEAR", "DAYOFWEEK", "HAIL", "DATE", "SLP", "THUNDER", "RAIN_DRIZZLE")))
+model.cla <- c(setdiff(names(model.data.day), c("STRIKECOUNT", "DAYOFWEEK", "HAIL", "SLP", "THUNDER", "RAIN_DRIZZLE")))
 
 model.cla <- model.data.day %>% dplyr::select(!!model.cla)
 
