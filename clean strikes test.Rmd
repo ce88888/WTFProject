@@ -1,0 +1,897 @@
+---
+title: "clean strikes test"
+author: "Christian Endter"
+date: "15/02/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r Read and Aggregate Data}
+data <- readRDS("KDEN model data all flights.RDS")
+
+### Set 1: Base data (adjust time filter as needed)
+### - every line corresponds to a single flight with STRIKE = 1/0
+d <- data %>% dplyr::filter(year(DATE) %in% 1992:2019) %>%
+    mutate(WEEK = as.factor(isoweek(DATE)), 
+           MONTH = as.factor(month(DATE)))
+
+### TEST - take only strikes which appear to have happened in the air (note: note clear what arrival/departure means)
+data %>% group_by(`PHASE OF FLIGHT`) %>% summarise(STRIKES = sum(STRIKE))
+
+d <- filter(d, `PHASE OF FLIGHT` %in% c("APPROACH","CLIMB","DESCENT","TAKE-OFF RUN",NA))
+  
+### Set 2: Data aggregated by hour
+### - every line corresponds to a particular hour on a date with STRIKES = num strikes, and STRIKE = 1/0
+d_day_hour <- d %>%
+  group_by(`AIRPORT ID`,DATE,RTIME) %>%
+  summarise(`FLTS TOTAL` = first(`TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
+  mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+
+# d_day_hour$WEEK <- as.factor(d_day_hour$WEEK)
+# d_day_hour$MONTH<- as.factor(d_day_hour$MONTH)
+
+### Set 3: Data aggregated by day
+### - every line correspondes to a particular date with STRIKES = num strikes, and STRIKE = 1/0 
+d_day <- d_day_hour %>%
+  group_by(`AIRPORT ID`,DATE) %>%
+  summarise(`FLTS TOTAL` = sum(`FLTS TOTAL`), STRIKES = sum(STRIKE),
+            BIRDCOUNT = first(BIRDCOUNT),
+            TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+            `WIND ANGLE` = mean(`WIND ANGLE`, na.rm=T), `WIND SPEED`= mean(`WIND SPEED`,na.rm=TRUE),
+            CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+            VIS = mean(VIS, na.rm=T),
+            PRECIP = mean(PRECIP, na.rm=T)) %>%
+  mutate(STRIKE = ifelse(STRIKES>0,1,0),
+         WEEK = factor(isoweek(DATE), levels=1:53),
+         MONTH = factor(month(DATE), levels=1:12))
+```
+
+
+```{r by hour}
+
+dh <- d_day_hour %>% filter(year(DATE) %in% 2000:2018) %>% na.omit() 
+dh$DAYOFWEEK <- wday(dh$DATE)
+
+#dh <- dplyr::select(dh,DATE, STRIKE, `FLTS TOTAL`, BIRDCOUNT, STRIKES, WEEK, MONTH)
+
+#d <- left_join(d, KDEN_Weather_New, by="DATE")
+
+dh <- as.data.frame(dh)
+dh$STRIKE <- as.factor(ifelse(dh$STRIKE==0, "NO", "YES"))
+
+# Remove AirportId and Date columns
+dh <- subset(dh, select = -c(`AIRPORT ID`)) %>% rename(WS = `WIND SPEED`, WA = `WIND ANGLE`, FLTS = `FLTS TOTAL`)
+
+trainyn <- createDataPartition(dh$STRIKE, p=0.75, list=FALSE)
+dfTrain <- dh[trainyn,]
+dfTest <- dh[-trainyn,]
+
+dfTest %>% group_by(STRIKE) %>% summarise(n())
+
+rf2 <- train(STRIKE ~ WS + WA + BIRDCOUNT + FLTS+ 
+                 TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH + DAYOFWEEK,
+            data=dfTrain, method="gbm",
+            trControl = trainControl(method="cv", number=5, sampling="smote", summaryFunction = twoClassSummary, classProbs=T),
+            tuneGrid = expand.grid(interaction.depth = 1:3,
+                                   n.trees = 15000,
+                                   shrinkage=0.005,
+                                   n.minobsinnode = 10),
+            verbose=FALSE, metric = "Sens")
+rf2
+varImp(rf2)
+dfTest$PREDICTS<- predict(rf2,dfTest, type="raw")
+confusionMatrix(dfTest$PREDICTS, dfTest$STRIKE, positive="YES")
+prSummary(dfTest$PREDICT2, dfTest$STRIKE)
+
+### 91% accuracy? But largely specificity ... low Kappa
+
+
+
+
+
+
+
+
+# try to take all non-eliminated data points
+dfTrain$PREDICT <- predict(rf2,dfTrain, type="raw")
+confusionMatrix(dfTrain$PREDICT, dfTrain$STRIKE, positive="YES")
+
+xT <- filter(dfTrain, PREDICT=="YES")
+
+xT %>% group_by(STRIKE) %>% summarise(n())
+
+rf3 <- train(STRIKE ~ WS + WA + BIRDCOUNT + FLTS+ 
+                 TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH + WEEK + DAYOFWEEK,
+            data=xT, method="gbm",
+            trControl = trainControl(method="cv", number=5, sampling="down"),
+            tuneGrid = expand.grid(interaction.depth = 1:3,
+                                   n.trees = 15000,
+                                   shrinkage=0.005,
+                                   n.minobsinnode = 10),
+            verbose=FALSE)
+dfTest$PREDICT3 <- predict(rf3,dfTest, type="raw")
+confusionMatrix(dfTest$PREDICT3, dfTest$STRIKE, positive="YES")
+
+# dfTest_day <- dfTest %>% group_by(DATE) %>%
+#   mutate(PREDICT2 = ifelse(PREDICT2=="YES",1,0),
+#          STRIKE = ifelse(STRIKE=="YES",1,0)) %>%
+#  summarise(`FLTS` = sum(`FLTS`), STRIKES = sum(as.numeric(STRIKE)), STRIKESP = sum(PREDICT2),
+#             BIRDCOUNT = first(BIRDCOUNT),
+#             TEMP = mean(TEMP,na.rm=TRUE), SLP = mean(SLP, na.rm=TRUE),
+#             WA = mean(WA, na.rm=T), WS= mean(WS,na.rm=TRUE),
+#             CLOUDH = mean(CLOUDH, na.rm=T), COVERH = mean(COVERH, na.rm=T),
+#             VIS = mean(VIS, na.rm=T),
+#             PRECIP = mean(PRECIP, na.rm=T),
+#            DAYOFWEEK = first(DAYOFWEEK)) %>%
+#   mutate(STRIKE = ifelse(STRIKES>0,1,0),
+#          WEEK = factor(isoweek(DATE), levels=1:53),
+#          MONTH = factor(month(DATE), levels=1:12))
+# 
+# 
+# glmP <- glm(STRIKES ~ WS + WA + BIRDCOUNT + FLTS+
+#                 TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH + DAYOFWEEK + STRIKE,
+#             data=dfTest_day, family="poisson")
+# 
+# dfTest_day$PREDICT4 <- predict(glmP,dfTest_day, type="response" )
+# confusionMatrix(dfTest$PREDICT4, dfTest$STRIKES)
+# summary(glmP)
+
+
+```
+
+
+```{r}
+data %>% group_by(year(DATE)) %>% summarise(sum(STRIKECOUNT))
+
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(MONTH, DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+
+`KDEN FAA` %>% filter(year(DATE) %in% 2000:2018) %>% group_by(STRIKE) %>% summarise(n())
+
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE))
+
+#d <- left_join(d, KDEN_Weather_New, by="DATE")
+
+d <- as.data.frame(d)
+d$STRIKE <- as.factor(ifelse(d$STRIKE==0, "NO", "YES"))
+
+
+
+# Remove AirportId and Date columns
+d <- subset(d, select = -c(`AIRPORT ID`, DATE)) %>% rename(FLTS = `FLTS TOTAL`)
+
+trainyn <- createDataPartition(d$STRIKE, p=0.75, list=FALSE)
+dfTrain <- d[trainyn,]
+dfTest <- d[-trainyn,]
+
+
+
+
+rf1 <- randomForest::randomForest(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH,
+  data = dfTrain,
+  mtry = 3,
+  importance = TRUE,
+  proximity = TRUE,
+  do.trace = 100
+)
+
+rf1
+
+dfTest$PREDICT <- predict(rf1, dfTest, type="class")
+# confusionMatrix(dfTest$PREDICT, dfTest$STRIKE, positive="YES") DAILY DATA, KRISHNA NEW
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction  NO YES
+#        NO  691 316
+#        YES 249 479
+#                                           
+#                Accuracy : 0.6744          
+#                  95% CI : (0.6517, 0.6964)
+#     No Information Rate : 0.5418          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.3398          
+#                                           
+#  Mcnemar's Test P-Value : 0.005492        
+#                                           
+#             Sensitivity : 0.6025          
+#             Specificity : 0.7351          
+#          Pos Pred Value : 0.6580          
+#          Neg Pred Value : 0.6862          
+#              Prevalence : 0.4582          
+#          Detection Rate : 0.2761          
+#    Detection Prevalence : 0.4196          
+#       Balanced Accuracy : 0.6688          
+#                                           
+#        'Positive' Class : YES             
+#              
+
+#Class imbalance
+dfTrain %>% group_by(STRIKE) %>% summarise(n())
+
+
+rf2 <- train(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + WEEKDAY + WEEK,
+            data=dfTrain, method="gbm",
+            trControl = trainControl(method="cv", number=5, sampling="down"),
+            tuneGrid = expand.grid(interaction.depth = 3,
+                                   n.trees = 15000,
+                                   shrinkage=0.005,
+                                   n.minobsinnode = 10),
+            verbose=FALSE, metric="Kappa")
+rf2
+varImp(rf2)
+
+dfTest$PREDICT2 <- predict(rf2,dfTest, type="raw")
+predictP <- predict(rf2, dfTest, type="prob")
+dfTest$PREDICT22 <- as.factor(ifelse(predictP$NO>0.3,"NO","YES"))
+
+
+confusionMatrix(dfTest$PREDICT2, dfTest$STRIKE, positive="YES")
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction  NO YES
+#        NO  633 294
+#        YES 307 501
+#                                          
+#                Accuracy : 0.6536         
+#                  95% CI : (0.6307, 0.676)
+#     No Information Rate : 0.5418         
+#     P-Value [Acc > NIR] : <2e-16         
+#                                          
+#                   Kappa : 0.3032         
+#                                          
+#  Mcnemar's Test P-Value : 0.6245         
+#                                          
+#             Sensitivity : 0.6302         
+#             Specificity : 0.6734         
+#          Pos Pred Value : 0.6200         
+#          Neg Pred Value : 0.6828         
+#              Prevalence : 0.4582         
+#          Detection Rate : 0.2888         
+#    Detection Prevalence : 0.4657         
+#       Balanced Accuracy : 0.6518         
+#                                          
+#        'Positive' Class : YES   
+
+
+# STRIKE ~ WS + WA + BIRDCOUNT + FLTS+ 
+#                 TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH
+
+glmP <- glm(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + DAYOFWEEK + MONTH,
+            data=dfTest, family="binomial")
+
+dfTest$PREDICT4 <- predict(glmP,dfTest, )
+confusionMatrix(dfTest$PREDICT4, dfTest$STRIKES)
+summary(glmP)
+
+
+glmn <- train(STRIKE ~ WS + WA + BIRDCOUNT + FLTS+ 
+                TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH,
+            data=dfTrain, method="glmnet",
+            trControl = trainControl(method="cv", number=5, sampling="smote"))
+summary(glmn)
+plot(varImp(glmn, scale=FALSE))
+
+dfTest$PREDICT5 <- predict(glmn,dfTest )
+confusionMatrix(dfTest$PREDICT5, dfTest$STRIKE)
+
+```
+
+```{r}
+library(xgboost)
+library(caret)
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE))
+
+#d <- left_join(d, KDEN_Weather_New, by="DATE")
+
+d <- as.data.frame(d)
+trainyn <- createDataPartition(d$STRIKE, p=0.75, list=FALSE)
+dfTrain <- d[trainyn,]
+dfTest <- d[-trainyn,]
+rm(trainyn)
+
+
+xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT, STRIKE)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER) )
+
+#x <- ifelse(dfTrain$STRIKE=="YES",1,0)
+x <- dfTrain$STRIKE
+positives <- sum(x)
+negatives <- length(x)-sum(x)
+w <- negatives/positives
+
+
+modelXGB_sample <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(as.factor(dfTrain$STRIKE)),
+  nfold = 5,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 50,
+  # optimal is 97
+  max_depth = 50,
+  # maximum depth of tree
+  eta = 0.3,
+  # step size shrinkage, learning rate
+  nthread = 4,
+  # number of threads to be used. 16 cores available
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "binary:logistic",
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER) )
+
+prob_predXGB_sample <- predict(modelXGB_sample, newdata = as.matrix(xgTest)) # Predict the Test set results (probabilities)
+predictXGB_sample = ifelse(prob_predXGB_sample > 0.5, 1, 0) # convert probabilities to binary
+cmXGB_sample <- table(predictXGB_sample>0.7, dfTest$STRIKE)
+
+confusionMatrix(as.factor(ifelse(prob_predXGB_sample>0.5,1,0)), as.factor(dfTest$STRIKE), positive="1")
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = modelXGB_sample)
+xgb.plot.importance(imp[1:20])
+
+cmXGB_sample # Confusion matrix
+errorXGB_sample <- 100*(1-sum(diag(cmXGB_sample))/sum(cmXGB_sample))
+errorXGB_sample # error rate
+accuracyXGB_sample <- 100 - errorXGB_sample
+accuracyXGB_sample # accuracy rate
+precisionXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[2,1],cmXGB_sample[2,2]) 
+precisionXGB_sample # precision
+recallXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[1,2],cmXGB_sample[2,2]) 
+recallXGB_sample # recall
+FscoreXGB_sample <- 2*precisionXGB_sample*recallXGB_sample/(precisionXGB_sample+recallXGB_sample) 
+FscoreXGB_sample # F-score
+```
+
+
+```{r Lightgbm}
+
+library(lightgbm)
+
+lgbmTrain <- select(dfTrain, -c(DATE,STRIKECOUNT, STRIKE)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER) )
+lgbmTrain <- as.matrix(lgbmTrain)
+lgbmTrainLabel <- dfTrain$STRIKE
+
+lgbm <- lightgbm(lgbmTrain, label=lgbmTrainLabel, 
+                 num_leaves=4, 
+                 boosting_type="goss",
+                 metric="auc",
+                 learning_rate = 0.01, 
+                 nrounds=2000L, 
+                 objective="binary",
+                 early_stopping_rounds = 50,
+                 verbose = 0
+                 )
+
+lgbmTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER) )
+lgbmTest <- as.matrix(lgbmTest)
+
+lgbm_predict <- predict(lgbm, data=lgbmTest)
+caret::confusionMatrix(as.factor(ifelse(lgbm_predict>0.5,1,0)),as.factor(dfTest$STRIKE),positive="1")
+
+library(ROCR)
+library(ModelMetrics)
+pred <- prediction(lgbm_predict, dfTest$STRIKE)
+auc(dfTest$STRIKE,lgbm_predict)
+plot(performance(pred,"acc"))
+plot(performance(pred, "tpr","fpr")) + abline(a=0,b=1)
+
+
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1
+#          0 717 322
+#          1 219 477
+#                                           
+#                Accuracy : 0.6882          
+#                  95% CI : (0.6658, 0.7099)
+#     No Information Rate : 0.5395          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.3665          
+#                                           
+#  Mcnemar's Test P-Value : 1.158e-05       
+#                                           
+#             Sensitivity : 0.5970          
+#             Specificity : 0.7660 
+
+
+```
+
+
+```{r}
+# quick look at risk levels on more balanced data
+
+x <- d %>% mutate(RATIO=STRIKE/FLIGHTCOUNT, DAY = yday(DATE))
+
+y <- x %>% group_by(WEEK) %>% summarise(n(),sum(STRIKECOUNT),max(STRIKECOUNT),min(STRIKECOUNT), MEANR=mean(RATIO)*10000,MAXR=max(RATIO)*10000,MINR= min(RATIO)*10000, MEDR = median(RATIO)*10000)
+ggplot(x,aes(x=as.factor(WEEK),y=RATIO)) + geom_boxplot() + coord_flip()
+
+y <- transform(y,WQUANT = cut(y$MEANR, breaks = quantile(y$MEANR, probs = seq(0,1,1/3)), labels=1:3, include.lowest=TRUE))
+
+# look at plot by Q
+ggplot(y, aes(DAY,WQUANT)) + geom_point()
+
+library(mgcv)
+g <- gam(as.integer(WQUANT) ~ s(as.integer(WEEK, bs = 'cc', k = 253)), 
+         method="REML", data=y)
+
+y$WQP <- predict(g,y)
+
+ggplot(y, aes(WEEK,WQUANT)) + geom_point() + geom_line(aes(WEEK,WQP)) + 
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 1.5, fill = "lightgreen", alpha = .5, color = NA) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 1.5, ymax = 2.5, fill = "yellow", alpha = .5, color = NA) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 2.5, ymax = 4, fill = "red", alpha = .5, color = NA)
+```
+
+```{r}
+# can we do this by day and give some leeways around days ... unreasonable to think that birds care about specific days
+
+
+```
+
+```{r}
+# Add Quantile to data and fit model(s)
+
+library(xgboost)
+library(caret)
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE))
+
+# calculate quantile across weeks
+x <- d %>% 
+  mutate(RATIO=STRIKE/FLIGHTCOUNT, DAY = yday(DATE)) %>% 
+  group_by(WEEK) %>% 
+  summarise(MEANR = mean(RATIO)*10000) %>% # factor only so easier to read
+  transform(RISK = cut(MEANR, breaks = quantile(MEANR, probs = seq(0,1,1/3)), labels=c(0,1,2), include.lowest=TRUE)) %>%
+  dplyr::select(-MEANR)
+
+# join them back to the main data set
+dd <- left_join(d,x, by=c("WEEK"="WEEK"))
+
+# prepare for xg,lgbm
+
+dd <- as.data.frame(dd)
+trainyn <- createDataPartition(dd$RISK, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+
+xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, WEEK)) %>% 
+  mutate(DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, WEEK)) %>% 
+  mutate(DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+mXGB <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(dfTrain$RISK),
+  nfold = 5,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 100,
+  max_depth = 50,
+  eta = 0.1,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+caret::confusionMatrix(dfTest$RISK,xgbMulti$RISK)
+#table(dfTest$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+# which data points are misclassified?
+dfTest$RISKP <- xgbMulti$RISK
+dfTest$ACCURATE <- ifelse(dfTest$RISK == dfTest$RISKP,1,0)
+
+dfTest %>% group_by(WEEK) %>% summarise(mean(ACCURATE))
+
+# confusion matrix for week = n
+xyz <- filter(dfTest, WEEK==10)
+confusionMatrix(xyz$RISK, xyz$RISKP)
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 510  88   0
+#          1  94 375  69
+#          2   0  32 566
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8368          
+#                  95% CI : (0.8185, 0.8539)
+#     No Information Rate : 0.3662          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.7546          
+#                                           
+#  Mcnemar's Test P-Value : NA              
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8444   0.7576   0.8913
+# Specificity            0.9221   0.8684   0.9709
+# Pos Pred Value         0.8528   0.6970   0.9465
+# Neg Pred Value         0.9173   0.8997   0.9393
+# Prevalence             0.3483   0.2855   0.3662
+# Detection Rate         0.2941   0.2163   0.3264
+# Detection Prevalence   0.3449   0.3103   0.3449
+# Balanced Accuracy      0.8832   0.8130   0.9311  
+
+```
+```{r WEEK}
+
+# Take 2 - not week in year but actual week's mean strike Ratio vs. those in data set
+
+# get distribution across data set:
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), YEAR=year(DATE), DAY=yday(DATE))
+
+# ratio for each week in each year (i.e. actuals)
+x <- d %>% 
+  mutate(RATIO=STRIKE/FLIGHTCOUNT) %>% 
+  group_by(YEAR,WEEK) %>% 
+  summarise(MEANR = mean(RATIO)*10000) 
+
+# map to each week in each year
+dd <- left_join(d,x, by=c("YEAR"="YEAR","WEEK"="WEEK"))
+
+## results in MEANR column which has the average of daily strike ratios for that specific week
+
+# Add risk level
+dd <-mutate(dd,RISK = cut(MEANR, breaks = quantile(MEANR, probs = seq(0,1,1/3)), labels=c(0,1,2), include.lowest=TRUE))
+#dd %>% group_by(RISK) %>% summarise(n(),m=mean(MEANR),min(MEANR),max(MEANR))
+
+dd <- as.data.frame(dd)
+trainyn <- createDataPartition(dd$RISK, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+
+xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, MEANR)) %>% 
+  mutate(WEEK=as.numeric(WEEK),DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, MEANR)) %>% 
+  mutate(WEEK=as.numeric(WEEK),DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+mXGB <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(dfTrain$RISK),
+  nfold = 5,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 100,
+  max_depth = 50,
+  eta = 0.1,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+caret::confusionMatrix(dfTest$RISK,xgbMulti$RISK)
+#table(dfTest$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+# with week
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 481  70  28
+#          1 109 388  81
+#          2  47  70 460
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.7664          
+#                  95% CI : (0.7458, 0.7862)
+#     No Information Rate : 0.3674          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.6496          
+#                                           
+#  Mcnemar's Test P-Value : 0.002757        
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.7551   0.7348   0.8084
+# Specificity            0.9107   0.8425   0.8996
+
+
+xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, MEANR,WEEK)) %>% 
+  mutate(DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, MEANR,WEEK)) %>% 
+  mutate(DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+mXGB <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(dfTrain$RISK),
+  nfold = 5,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 100,
+  max_depth = 50,
+  eta = 0.1,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+caret::confusionMatrix(dfTest$RISK,xgbMulti$RISK)
+#table(dfTest$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+#without week
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 475  77  27
+#          1 110 379  89
+#          2  48  73 456
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.7555          
+#                  95% CI : (0.7345, 0.7756)
+#     No Information Rate : 0.3651          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.6332          
+#                                           
+#  Mcnemar's Test P-Value : 0.004061        
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.7504   0.7164   0.7972
+# Specificity            0.9055   0.8349   0.8959
+
+```
+
+
+```{r DAILY xgboost}
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(xgboost)
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE))
+
+# calculate quantile across weeks
+# x <- d %>% 
+#   mutate(RATIO=STRIKE/FLIGHTCOUNT)# %>% 
+#   group_by(DAY) %>% 
+#   summarise(MEANR = mean(RATIO)*10000) %>% # factor only so easier to read
+#   transform(RISK = cut(MEANR, breaks = quantile(MEANR, probs = seq(0,1,1/3)), labels=c(0,1,2), include.lowest=TRUE)) %>%
+#   dplyr::select(-MEANR)
+# x
+
+x <- d %>% 
+  mutate(RATIO=STRIKE/FLIGHTCOUNT) %>% 
+  mutate(RISK = .bincode(x$RATIO, breaks = quantile(x$RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)-1) %>%
+  mutate(RISK = as.factor(RISK))
+#x %>% group_by(RISK) %>% summarise(mean(RATIO))
+
+
+# prepare for xg,lgbm
+
+dd <- as.data.frame(x)
+trainyn <- createDataPartition(dd$RISK, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+
+xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, RATIO)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, RATIO)) %>% 
+  mutate(WEEK = as.numeric(WEEK), DAYOFWEEK = as.numeric(WEEKDAY), MONTH = as.numeric(MONTH),
+         FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+mXGB <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(dfTrain$RISK),
+  nfold = 5,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 50,
+  max_depth = 50,
+  eta = 0.1,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  subsample = 1,
+  colsample_bytree = 1,
+  save_period = NULL
+) 
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+caret::confusionMatrix(dfTest$RISK,xgbMulti$RISK)
+#table(dfTest$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+# 
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 667  68 205
+#          1  38 181   0
+#          2 301   0 274
+# 
+# Overall Statistics
+#                                          
+#                Accuracy : 0.6471         
+#                  95% CI : (0.624, 0.6696)
+#     No Information Rate : 0.5802         
+#     P-Value [Acc > NIR] : 7.169e-09      
+#                                          
+#                   Kappa : 0.387          
+#                                          
+#  Mcnemar's Test P-Value : NA             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6630   0.7269   0.5720
+# Specificity            0.6250   0.9744   0.7602
+
+```
+
+
+```{r Multiclass LightGBM}
+
+lgbmTrain <- as.matrix(xgTrain)
+lgbmTrainLabel <- as.integer(dfTrain$RISK)
+
+#LAMBDARANK?
+lgbm <- lightgbm(lgbmTrain, label=lgbmTrainLabel, 
+                 num_leaves=4, 
+                 boosting_type="goss",
+                 
+                 learning_rate = 0.01, 
+                 nrounds=2000L, 
+                 objective="multiclass",
+                 num_class = 3,
+                 early_stopping_rounds = 50
+                 )
+
+```
+
