@@ -60,7 +60,9 @@ packages <- c(
   'DT',
   'h2o',
   'AppliedPredictiveModeling',
-  'xgboost'
+  'xgboost',
+  'InformationValue',
+  'caretEnsemble'
 )
 
 # Checking for package installations on the system and installing if not found
@@ -86,16 +88,35 @@ h2o.init()
 # Read Classification dataset from RDS
 class.data <- readRDS("KDEN_Class_Data_New.RDS")
 
+# Reorder data frame by Date 
+class.data <- class.data[order(class.data$DATE), ]
+
+class.data$PRCP_LAG_1 <- lag(class.data$PRCP, k = 1)
+
+# class.data$TEMP_LAG_1 <- lag(class.data$TEMP, k = 1)
+
+class.data <- class.data[complete.cases(class.data), ]
+
+class.data <-
+  class.data[!(class.data$MXSPD == 999.9 |
+                 class.data$PRCP == 99.99 | class.data$PRCP_LAG_1 == 99.99),]
+
+class.data$FOG <- as.numeric(class.data$FOG)
+class.data$SNOW_ICE <- as.numeric(class.data$SNOW_ICE)
+
+class.data$STRIKE <-
+  as.factor(ifelse(class.data$STRIKE == 0, "NO", "YES"))
+
 ```
 
 
 ```{r Test Train Splits}
 
 # one-hot-encoding categorical features
-ohe_feats = c('MONTH', 'SEASON')
+ohe_feats = c('MONTH')
 
 # Create dummies
-dummies <- dummyVars(~ MONTH +  SEASON, data = class.data)
+dummies <- dummyVars(~ MONTH, data = class.data)
 
 df.dummies <- as.data.frame(predict(dummies, newdata = class.data))
 
@@ -103,6 +124,22 @@ df.dummies <- as.data.frame(predict(dummies, newdata = class.data))
 class.data <-
   cbind(class.data[, -c(which(colnames(class.data) %in% ohe_feats))], df.dummies)
 
+
+valid.cl.data <-
+  class.data[(class.data$YEAR == 2019), ]
+
+class.data <-
+  class.data %>% filter(!class.data$YEAR %in% c(1995, 1996, 1997, 1998, 1999, 2019))
+
+class.data <- subset(class.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE))
+
+valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE))
+
+
+
+```
+
+```{r}
 # Create the training and test datasets
 set.seed(100)
 
@@ -110,7 +147,7 @@ class.data$STRIKE <- as.factor(class.data$STRIKE)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers.cl <-
-  createDataPartition(class.data$STRIKE, p = 0.75, list = FALSE)
+  createDataPartition(class.data$STRIKE, p = 0.70, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.data <- class.data[trainRowNumbers.cl, ]
@@ -119,67 +156,143 @@ train.data <- class.data[trainRowNumbers.cl, ]
 test.data <- class.data[-trainRowNumbers.cl, ]
 ```
 
+
 ```{r Validate Functions}
-validateAndPrintResult <- function(model, test.data) {
+
+validateAndPrintResult <- function(model, data) {
   # Summarise Results
   print(model)
   
   ## run MLeval
   res <- evalm(model)
   
+  ## get ROC
+  
+  res$roc
+  
+  ## get calibration curve
+  
+  res$cc
+  
+  ## get precision recall gain curve
+  
+  res$prg
+  
   # Predict on testData
-  predicted.resp <- predict(model, test.data)
+  predicted.resp <- predict(model, data)
   head(predicted.resp)
   
-  # Compute the confusion matrix
-  confusionMatrix(
-    reference = as.factor(test.data$STRIKE),
+  caret::confusionMatrix(
+    reference = as.factor(data$STRIKE),
     data = predicted.resp,
     mode = 'everything',
     positive = 'YES'
   )
 }
+
 ```
 
 ```{r}
-# 5 Fold cross validation with Probabilities
-tc <- trainControl(
-  method = "cv",
-  number = 5,
-  savePredictions = "final",
-  classProbs = TRUE,
-  verboseIter = TRUE,
-  summaryFunction = twoClassSummary
-)
+# # 5 Fold cross validation with Probabilities
+# tc <- trainControl(
+#   method = "cv",
+#   number = 5,
+#   savePredictions = "final",
+#   classProbs = TRUE,
+#   verboseIter = TRUE,
+#   summaryFunction = twoClassSummary
+# )
 ```
+
+```{r}
+
+# model.metrics.class <-
+#   data.frame(
+#     "Model_Name" = character(0),
+#     "Data_Type" = character(0),
+#     "AUC" = numeric(0),
+#     "Accuracy" = numeric(0),
+#     "Sensitivity" = numeric(0),
+#     "Specificity" = numeric(0),
+#     "Precision" = numeric(0),
+#     "Recall" = numeric(0),
+#     "Kappa" = numeric(0),
+#     "Confusion_Matrix" = character(0),
+#     stringsAsFactors = FALSE
+#   )
+
+```
+
+```{r}
+# saveModelMetrics <-
+#   function(model.predictions,
+#            data,
+#            model.name,
+#            data.type) {
+# 
+#     # auc
+#     
+#     # accuracy
+#     
+#     # sensitivity
+#     
+#     # specificity
+#     
+#     # precision
+#     
+#     # recall
+#     
+#     # kappa
+#     
+#     # confusionMatrix
+#     
+#     
+#     # combine all the above validation metrics
+#     model.summary <-
+#       c(model.name,
+#         data.type,
+#         auc,
+#         accuracy,
+#         sensitivity,
+#         specificity,
+#         precision,
+#         recall,
+#         kappa,
+#         confusionMatrix)
+#     
+#     return(model.summary)
+#   }
+```
+
+
 
 ```{r Elastic Net Classification Technique}
 
-# model.train.data <- as.matrix(train.data)
+# X_train = sparse.model.matrix(as.formula(paste(
+#   "STRIKE ~", paste(colnames(train.data[, -11]), sep = "", collapse = " +")
+# )), data = train.data)
 # 
-# model.test.data <- as.matrix(test.data)
+# y_train <- as.factor(train.data[,11])
 # 
-# # # Note alpha=1 for lasso only and can blend with ridge penalty down to
-# # # alpha=0 ridge only.
-# glmmod <- glmnet(
-#   model.train.data,
-#   as.factor(train.data$STRIKE),
-#   alpha = 1,
-#   family = "binomial"
-# )
+# X_test = sparse.model.matrix(as.formula(paste(
+#   "STRIKE ~", paste(colnames(test.data[, -11]), sep = "", collapse = " +")
+# )), data = test.data)
 # 
-# # Plot variable coefficients vs. shrinkage parameter lambda.
-# plot(glmmod, label=TRUE)
-# coef(glmmod)
-# print(glmmod)
+# y_test <- as.factor(test.data[,11])
+# 
+# X_val = sparse.model.matrix(as.formula(paste(
+#   "STRIKE ~", paste(colnames(valid.cl.data[, -11]), sep = "", collapse = " +")
+# )), data = valid.cl.data)
+# 
+# y_val <- as.factor(valid.cl.data[,11])
 # 
 # # ELASTIC NET WITH 0 < ALPHA < 1
 # a <- seq(0.1, 0.9, 0.05)
 # search <- foreach(i = a, .combine = rbind) %dopar% {
 #   cv <-
 #     cv.glmnet(
-#       model.train.data,
-#       as.factor(train.data$STRIKE),
+#       X_train,
+#       y_train,
 #       family = "binomial",
 #       nfold = 10,
 #       type.measure = "deviance",
@@ -194,226 +307,493 @@ tc <- trainControl(
 # }
 # plot(search$lambda.1se)
 # cv3 <- search[search$cvm == min(search$cvm), ]
-# md3 <-
+# 
+# 
+# model.glmnet <-
 #   glmnet(
-#     model.train.data,
-#     as.factor(model.train.data$STRIKE),
+#     X_train,
+#     y_train,
 #     family = "binomial",
 #     lambda = cv3$lambda.1se,
 #     alpha = cv3$alpha
 #   )
-# coef(md3)
+# coef(model.glmnet)
 # 
-# roc(as.factor(model.test.data$STRIKE), predict(md3, model.test.data, type = "response"))
+# model.glmnet
 # 
-# preds <- predict(md3, model.test.data, type = "response")
+# summary(model.glmnet)
+# 
+# preds <- predict(model.glmnet, X_test, type = "response")
 # 
 # # Calculate true positive rate and false positive rate on the prediction object
-# perf <- performance(prediction(preds, model.test.data$STRIKE), 'tpr', 'fpr')
+# perf <- performance(prediction(preds, y_test), 'tpr', 'fpr')
+# roc.auc.glmnet <- performance(prediction(preds, y_test), "auc")
+# plot(perf, main = paste("ROC - Elastic Net"," | ","AUC - ", roc.auc.glmnet@y.values), colorize = TRUE) # plot ROC curve
+# lines(c(0, 1), c(0, 1), col = "gray", lty = 4)
 # 
-# plot(perf)
+# 
+# predicted <- predict(model.glmnet, X_val, type = "response")
+# 
+# # Calculate true positive rate and false positive rate on the prediction object
+# perf <- performance(prediction(predicted, y_val), 'tpr', 'fpr')
+# roc.auc.glmnet <- performance(prediction(predicted, y_val), "auc")
+# plot(perf, main = paste("ROC - Elastic Net"," | ","AUC - ", roc.auc.glmnet@y.values), colorize = TRUE) # plot ROC curve
+# lines(c(0, 1), c(0, 1), col = "gray", lty = 4)
+# 
+# 
+# 
+# optCutOff <- optimalCutoff(y_val, predicted, optimiseFor = "Both", returnDiagnostics = T)
+# optCutOff$
+# 
+# 
+# #Misclassify Errors - needs to be low
+# misClassError(y_val, predicted, threshold = optCutOff$optimalCutoff)
+# 
+# # Concordance - needs to be high
+# Concordance(y_val, predicted)
+# 
+# sensitivity(y_val, predicted, threshold = optCutOff)
+# 
+# specificity(y_val, predicted, threshold = optCutOff)
+# 
+# # Confusion Matrix
+# test <- confusionMatrix(y_val, predicted, threshold = optCutOff)
+# 
+# ks_plot(y_val, predicted[1])
+# 
+# 
+# predicted.class <- predict(model.glmnet, X_val, type = "class")
+# 
+# # Output dataframe with probabilities
+# output.data <- cbind(valid.cl.data, predicted)
+# output.data <- cbind(output.data, predicted.class)
+
 ```
 
 ```{r}
-model <-
-  glm (
-    as.factor(STRIKE) ~ ., 
-    data = train.data,
-    family = "binomial"
-  )
-summary(model)
 
-## Predict the Values
-predict <- predict(model, test.data, type = 'response')
+trControl <- trainControl(
 
-## Create Confusion Matrix
-table(test.data$STRIKE, predict > 0.2)
+        method="cv",
 
-# ROC Curve
-ROCRpred <- prediction(predict, test.data$STRIKE)
-ROCRperf <- performance(ROCRpred, 'tpr','fpr')
-plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
-ROCRperf
+        number=7,
 
-# # Predict using test data and generate confusion matrix
-# predicted.response <- predict(model, test.up.data, )
-# confusionMatrix(data = as.factor(predicted.response), reference = test.up.data$STRIKE)
-# 
-# predicted.response
-summary(model) # Summary of model
-cmLR <- table(predict>0.2, test.data$STRIKE)
-cmLR # Confusion matrix
-errorLR <- 100*(1-sum(diag(cmLR))/sum(cmLR))
-errorLR # error rate
-accuracyLR <- 100 - errorLR
-accuracyLR # accuracy rate
+        savePredictions="final",
 
-#Code doesn't work-- check with Krishna
-precisionLR <- 100*cmLR[2,2]/sum(cmLR[2,1],cmLR[2,2])
-precisionLR # precision
-recallLR <- 100*cmLR[2,2]/sum(cmLR[1,2],cmLR[2,2])
-recallLR # recall
-FscoreLR <- 2*precisionLR*recallLR/(precisionLR+recallLR)
-FscoreLR # F-score
-```
+        index=createResample(as.factor(train.data$STRIKE), 7),
+        
+        classProbs = TRUE,
+        
+        summaryFunction = twoClassSummary,
+
+        allowParallel =TRUE
+
+)
 
 
-```{r}
-# all others may have just failed and are not listed here
-models.cla <- c("knn", "AdaBoost.M1", "rf")
-
-# register parallel front-end
-cl.cla <- makeCluster(detectCores())
-registerDoParallel(cl.cla)
-
-# this setup actually calls the caret::train function, in order to provide
-# minimal error handling this type of construct is needed.
-trainCall <- function(i)
-{
-  cat("----------------------------------------------------",
-      "\n")
-  
-  set.seed(123)
-  cat(i, " <- loaded\n")
-  
-  t2 <-
-    train(
-      train.data[, -11],
-      train.data[, c('STRIKE')],
-      method = i,
-      trControl = trainControl(method = "boot632",
-                               number = 5)
-    )
-}
-
-# use lapply/loop to run everything, required for try/catch error function to work
-t2 <- lapply(models.cla, trainCall)
-
-#remove NULL values, we only allow succesful methods, provenance is deleted.
-t2 <- t2[!sapply(t2, is.null)]
-
-# this setup extracts the results with minimal error handling 
-# TrainKappa can be sometimes zero, but Accuracy SD can be still available
-printCall <- function(i)
-{
-  return(tryCatch({
-    cat(sprintf("%-22s", (models.cla[i])))
-    cat(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4), "\t")
-    cat(round(getTrainPerf(t2[[i]])$TrainKappa, 4), "\t")
-    cat(t2[[i]]$times$everything[3], "\n")
-  },
-  error = function(e)
-    NULL))
-}
-	
-r2 <- lapply(1:length(t2), printCall)
-
-# stop cluster and register sequntial front end
-stopCluster(cl.cla)
-registerDoSEQ()
-
-
-# preallocate data types
-i = 1; MAX = length(t2);
-x1 <- character() # Name
-x2 <- numeric()   # R2
-x3 <- numeric()   # RMSE
-x4 <- numeric()   # time [s]
-x5 <- character() # long model name
  
-# fill data and check indexes and NA with loop/lapply
-for (i in 1:length(t2)) {
-  x1[i] <- t2[[i]]$method
-  x2[i] <-
-    as.numeric(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4))
-  x3[i] <- as.numeric(round(getTrainPerf(t2[[i]])$TrainKappa, 4))
-  x4[i] <- as.numeric(t2[[i]]$times$everything[3])
-  x5[i] <- t2[[i]]$modelInfo$label
-}
-  
-# coerce to data frame
-df1 <- data.frame(x1, x2, x3, x4, x5, stringsAsFactors = FALSE)
+# col_sample_rate
+# <chr>
+# learn_rate
+# <chr>
+# max_depth
+# <chr>
+# ntrees
+# <chr>
+# sample_rate
+# <chr>
+# model_ids
+# <chr>
+# auc
+# <chr>
+# 0.2509	0.0072	7	203	0.7626	grid_binomial_xgb_55_model_6	0.7270077693205641
 
-# print all results to R-GUI
-df1
+xgbTreeGrid <- expand.grid(nrounds = 500, max_depth = seq(2,8,by = 1), eta = 0.1, gamma = 0, colsample_bytree = 1.0,  subsample = 1.0, min_child_weight = 4)
 
-# plot models, just as example
-# ggplot(t2[[1]])
-# ggplot(t2[[1]])
+glmnetGridElastic <- expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
 
-# call web output with correct column names
-datatable(
-  df1,
-  options = list(
-    columnDefs = list(list(
-      className = 'dt-left', targets = c(0, 1, 2, 3, 4, 5)
-    )),
-    pageLength = MAX,
-    order = list(list(2, 'desc'))
-  ),
-  colnames = c('Num', 'Name', 'Accuracy', 'Kappa', 'time [s]', 'Model name'),
-  caption = paste('Classification results from caret models', Sys.time()),
-  class = 'cell-border stripe'
-)  %>%
-  formatRound('x2', 3) %>%
-  formatRound('x3', 3) %>%
-  formatRound('x4', 3) %>%
-  formatStyle(
-    2,
-    background = styleColorBar(x2, 'steelblue'),
-    backgroundSize = '100% 90%',
-    backgroundRepeat = 'no-repeat',
-    backgroundPosition = 'center'
-  )
 
-# print confusion matrix example
-caret::confusionMatrix(t2[[1]])
+# col_sample_rate
+# <chr>
+# learn_rate
+# <chr>
+# max_depth
+# <chr>
+# ntrees
+# <chr>
+# sample_rate
+# <chr>
+# model_ids
+# <chr>
+# auc
+# <chr>
+# 	0.4087	0.1532	1	385	0.9297
+gbm.tune.grid <- expand.grid(.n.trees = c(400), .interaction.depth = c(1, 3, 5), .shrinkage = c(.01, .1, .3), .n.minobsinnode = c(5, 10, 15))
+
+
+set.seed(333)
+
+modelList <- caretList(
+
+                  STRIKE ~ ., 
+
+                  train.data,
+
+                  trControl=trControl,
+
+                  metric = "ROC", 
+                  
+                  verbose = TRUE,
+
+                  tuneList=list(
+
+                  ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+
+                          xgbTree = caretModelSpec(method="xgbTree",  tuneGrid = xgbTreeGrid, nthread = 8),
+
+                          glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),  ## Elastic, highly correlated with lasso and ridge regressions
+                          
+                          rf = caretModelSpec(method = "rf", ntree = 2000, tuneLength = 20, tuneGrid = data.frame(mtry = 10)),  ## rf
+                          
+                          gbm = caretModelSpec(method = "gbm", tuneGrid = gbm.tune.grid) 
+
+                          )
+)
+
+
+```
+
+```{r}
+
+# gbm.pred <- predict(modelList$gbm, newdata = test.data, type = 'raw')
+# 
+# ## run MLeval
+# res <- evalm(modelList$gbm)
+#   
+# 
+# ## get ROC
+# 
+# res$roc
+# 
+# ## get calibration curve
+# 
+# res$cc
+# 
+# ## get precision recall gain curve
+# 
+# res$prg
+# 
+# caret::confusionMatrix(
+#   reference = as.factor(test.data$STRIKE),
+#   data = gbm.pred,
+#   mode = 'everything',
+#   positive = 'YES'
+# )
+
+validateAndPrintResult(modelList$xgbTree, test.data)
+
+validateAndPrintResult(modelList$xgbTree, valid.cl.data)
+
+
+```
+
+```{r}
+
+validateAndPrintResult(modelList$glmnet, test.data)
+
+validateAndPrintResult(modelList$glmnet, valid.cl.data)
+
+```
+
+```{r}
+
+
+validateAndPrintResult(modelList$rf, test.data)
+
+validateAndPrintResult(modelList$rf, valid.cl.data)
+```
+
+```{r}
+validateAndPrintResult(modelList$gbm, test.data)
+
+validateAndPrintResult(modelList$gbm, valid.cl.data)
+
+```
+
+
+```{r}
+set.seed(333)
+
+greedyEnsemble <- caretEnsemble(
+
+  c(modelList$rf, modelList$xgbTree, modelList$gbm), 
+
+  metric="ROC",
+
+  trControl = trainControl(
+    number = 7,
+    method = "cv",
+    classProbs = TRUE,
+    verboseIter = TRUE
+    
+  ))
+
+greedyEnsemble
+
+test.pred <- predict(greedyEnsemble, newdata = test.data)
+
+caret::confusionMatrix(
+  reference = as.factor(test.data$STRIKE),
+  data = test.pred,
+  mode = 'everything',
+  positive = 'YES'
+)
+
+valid.pred <- predict(greedyEnsemble, newdata = valid.cl.data)
+
+caret::confusionMatrix(
+  reference = as.factor(valid.cl.data$STRIKE),
+  data = valid.pred,
+  mode = 'everything',
+  positive = 'YES'
+)
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction  NO YES
+#        NO  703 297
+#        YES 235 497
+#                                           
+#                Accuracy : 0.6928          
+#                  95% CI : (0.6705, 0.7145)
+#     No Information Rate : 0.5416          
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.3777          
+#                                           
+#  Mcnemar's Test P-Value : 0.008177        
+#                                           
+#             Sensitivity : 0.6259          
+#             Specificity : 0.7495          
+#          Pos Pred Value : 0.6790          
+#          Neg Pred Value : 0.7030          
+#               Precision : 0.6790          
+#                  Recall : 0.6259          
+#                      F1 : 0.6514          
+#              Prevalence : 0.4584          
+#          Detection Rate : 0.2870          
+#    Detection Prevalence : 0.4226          
+#       Balanced Accuracy : 0.6877          
+#                                           
+#        'Positive' Class : YES             
+#                                    
+
+
+
+
+
+
+```
+
+```{r}
+stack = caretStack(modelList, method="glm", trControl = trControl)
+stack
+
+test.pred <- predict(stack, newdata = test.data)
+
+caret::confusionMatrix(
+  reference = as.factor(test.data$STRIKE),
+  data = test.pred,
+  mode = 'everything',
+  positive = 'YES'
+)
+
+valid.pred <- predict(stack, newdata = valid.cl.data)
+
+caret::confusionMatrix(
+  reference = as.factor(valid.cl.data$STRIKE),
+  data = valid.pred,
+  mode = 'everything',
+  positive = 'YES'
+)
+```
+
+
+```{r}
+# # all others may have just failed and are not listed here
+# models.cla <- c("knn", "AdaBoost.M1", "rf", 'glmnet', 'xgboost')
+# 
+# # register parallel front-end
+# cl.cla <- makeCluster(detectCores())
+# registerDoParallel(cl.cla)
+# 
+# # this setup actually calls the caret::train function, in order to provide
+# # minimal error handling this type of construct is needed.
+# trainCall <- function(i)
+# {
+#   cat("----------------------------------------------------",
+#       "\n")
+#   
+#   set.seed(123)
+#   cat(i, " <- loaded\n")
+#   
+#   t2 <-
+#     train(
+#       train.data[, -11],
+#       train.data[, c('STRIKE')],
+#       method = i,
+#       trControl = trainControl(method = "boot632",
+#                                number = 5)
+#     )
+# }
+# 
+# # use lapply/loop to run everything, required for try/catch error function to work
+# t2 <- lapply(models.cla, trainCall)
+# 
+# #remove NULL values, we only allow succesful methods, provenance is deleted.
+# t2 <- t2[!sapply(t2, is.null)]
+# 
+# # this setup extracts the results with minimal error handling 
+# # TrainKappa can be sometimes zero, but Accuracy SD can be still available
+# printCall <- function(i)
+# {
+#   return(tryCatch({
+#     cat(sprintf("%-22s", (models.cla[i])))
+#     cat(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4), "\t")
+#     cat(round(getTrainPerf(t2[[i]])$TrainKappa, 4), "\t")
+#     cat(t2[[i]]$times$everything[3], "\n")
+#   },
+#   error = function(e)
+#     NULL))
+# }
+# 	
+# r2 <- lapply(1:length(t2), printCall)
+# 
+# # stop cluster and register sequntial front end
+# stopCluster(cl.cla)
+# registerDoSEQ()
+# 
+# 
+# # preallocate data types
+# i = 1; MAX = length(t2);
+# x1 <- character() # Name
+# x2 <- numeric()   # R2
+# x3 <- numeric()   # RMSE
+# x4 <- numeric()   # time [s]
+# x5 <- character() # long model name
+#  
+# # fill data and check indexes and NA with loop/lapply
+# for (i in 1:length(t2)) {
+#   x1[i] <- t2[[i]]$method
+#   x2[i] <-
+#     as.numeric(round(getTrainPerf(t2[[i]])$TrainAccuracy, 4))
+#   x3[i] <- as.numeric(round(getTrainPerf(t2[[i]])$TrainKappa, 4))
+#   x4[i] <- as.numeric(t2[[i]]$times$everything[3])
+#   x5[i] <- t2[[i]]$modelInfo$label
+# }
+#   
+# # coerce to data frame
+# df1 <- data.frame(x1, x2, x3, x4, x5, stringsAsFactors = FALSE)
+# 
+# # print all results to R-GUI
+# df1
+# 
+# # plot models, just as example
+# # ggplot(t2[[1]])
+# # ggplot(t2[[1]])
+# 
+# # call web output with correct column names
+# datatable(
+#   df1,
+#   options = list(
+#     columnDefs = list(list(
+#       className = 'dt-left', targets = c(0, 1, 2, 3, 4, 5)
+#     )),
+#     pageLength = MAX,
+#     order = list(list(2, 'desc'))
+#   ),
+#   colnames = c('Num', 'Name', 'Accuracy', 'Kappa', 'time [s]', 'Model name'),
+#   caption = paste('Classification results from caret models', Sys.time()),
+#   class = 'cell-border stripe'
+# )  %>%
+#   formatRound('x2', 3) %>%
+#   formatRound('x3', 3) %>%
+#   formatRound('x4', 3) %>%
+#   formatStyle(
+#     2,
+#     background = styleColorBar(x2, 'steelblue'),
+#     backgroundSize = '100% 90%',
+#     backgroundRepeat = 'no-repeat',
+#     backgroundPosition = 'center'
+#   )
+# 
+# # print confusion matrix example
+# caret::confusionMatrix(t2[[1]])
 ```
 
 
 ```{r}
 
-# XGBoost ####
+# # XGBoost ####
+# 
+# modelXGB_sample <- xgboost(
+#   data = as.matrix(train.data[, -c(11, 9,10)]),
+#   label = as.matrix(train.data[,11]),
+#   nrounds = 50,
+#   # optimal is 97
+#   max_depth = 50,
+#   # maximum depth of tree
+#   eta = 0.3,
+#   # step size shrinkage, learning rate
+#   nthread = 4,
+#   # number of threads to be used. 16 cores available
+#   "gamma" = 0,
+#   # minimum loss reduction, controls regularisation
+#   objective = "binary:logistic",
+#   min_child_weight = 1,
+#   # minimum number of instances required in a child node
+#   subsample = 1,
+#   # controls number of samples supplied to a tree
+#   colsample_bytree = 1,
+#   # controls number of features supplied to a tree
+#   save_period = NULL
+# ) # controls number of features supplied to a tree
+# 
+# test.pred <- predict(modelXGB_sample, newdata = as.matrix(test.data[, -c(11, 9,10)]))
+# 
+# caret::confusionMatrix(
+#   reference = as.matrix(as.factor(test.data$STRIKE)),
+#   data = test.pred,
+#   mode = 'everything',
+#   positive = 'YES'
+# )
+# 
+# valid.pred <- predict(modelXGB_sample, newdata = valid.cl.data)
+# 
+# caret::confusionMatrix(
+#   reference = as.factor(valid.cl.data$STRIKE),
+#   data = valid.pred,
+#   mode = 'everything',
+#   positive = 'YES'
+# )
 
-modelXGB_sample <- xgboost(
-  data = as.matrix(train.data[, -c(11, 9,10)]),
-  label = as.matrix(train.data[,11]),
-  nrounds = 50,
-  # optimal is 97
-  max_depth = 50,
-  # maximum depth of tree
-  eta = 0.3,
-  # step size shrinkage, learning rate
-  nthread = 4,
-  # number of threads to be used. 16 cores available
-  "gamma" = 0,
-  # minimum loss reduction, controls regularisation
-  objective = "binary:logistic",
-  min_child_weight = 1,
-  # minimum number of instances required in a child node
-  subsample = 1,
-  # controls number of samples supplied to a tree
-  colsample_bytree = 1,
-  # controls number of features supplied to a tree
-  save_period = NULL
-) # controls number of features supplied to a tree
 
-
-prob_predXGB_sample <- predict(modelXGB_sample, newdata = as.matrix(test.data[,-c(11,9,10)])) # Predict the Test set results (probabilities)
-predictXGB_sample = ifelse(prob_predXGB_sample > 0.5, 1, 0) # convert probabilities to binary
-
-cmXGB_sample <- table(predictXGB_sample>0.7, test.data$STRIKE)
-cmXGB_sample # Confusion matrix
-errorXGB_sample <- 100*(1-sum(diag(cmXGB_sample))/sum(cmXGB_sample))
-errorXGB_sample # error rate
-accuracyXGB_sample <- 100 - errorXGB_sample
-accuracyXGB_sample # accuracy rate
-precisionXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[2,1],cmXGB_sample[2,2]) 
-precisionXGB_sample # precision
-recallXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[1,2],cmXGB_sample[2,2]) 
-recallXGB_sample # recall
-FscoreXGB_sample <- 2*precisionXGB_sample*recallXGB_sample/(precisionXGB_sample+recallXGB_sample) 
-FscoreXGB_sample # F-score
+# prob_predXGB_sample <- predict(modelXGB_sample, newdata = as.matrix(test.data[,-c(11,9,10)])) # Predict the Test set results (probabilities)
+# predictXGB_sample = ifelse(prob_predXGB_sample > 0.5, 1, 0) # convert probabilities to binary
+# 
+# cmXGB_sample <- table(predictXGB_sample>0.7, test.data$STRIKE)
+# cmXGB_sample # Confusion matrix
+# errorXGB_sample <- 100*(1-sum(diag(cmXGB_sample))/sum(cmXGB_sample))
+# errorXGB_sample # error rate
+# accuracyXGB_sample <- 100 - errorXGB_sample
+# accuracyXGB_sample # accuracy rate
+# precisionXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[2,1],cmXGB_sample[2,2]) 
+# precisionXGB_sample # precision
+# recallXGB_sample <- 100*cmXGB_sample[2,2]/sum(cmXGB_sample[1,2],cmXGB_sample[2,2]) 
+# recallXGB_sample # recall
+# FscoreXGB_sample <- 2*precisionXGB_sample*recallXGB_sample/(precisionXGB_sample+recallXGB_sample) 
+# FscoreXGB_sample # F-score
 
 
 # xgb.pred <-
