@@ -1,0 +1,379 @@
+
+```{r, include=FALSE}
+library(tidyverse)
+library(lubridate)
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+```
+
+### Risk level discussion
+
+
+We're doing two things (1) mapping actual risk as measured by the chance of any plane being hit to a level, and (2) assigning a level label to each data point (here: day). These two things are independent, but the choices we have need to be thought through.  
+
+For (1) we ideally want a mapping which ensures that the label preserves rank order (H = more risk than M than L). With what we're doing below, that's not an issue. (**BUT:** are there other criteria we need to apply to this mapping?)  
+
+For (2) we want to ensure consistency, i.e. what is H should be consistent across use cases (here: Pilots flying in/out of KDEN) ... so that means H must mean the same across the year (because otherwise it's a meaningless measure for pilots).
+
+Options for mapping risk to a level, where risk=strikes/flights  
+
+1. look at average risk for each and every day, cut these long vector of numbers into HML (see further below)  
+2. calculate the average across all weeks (not week-in-year), cut these into HML  
+3. calculate the average across all months (not month-in-year), cut these  
+  
+4. calculate the average of historical risks for each day-of-the year for the specific day, cut into HML  
+5. calculate the average of historical risk for each week-of-they year ...  
+6. calculate the average of historical risks for each month-of-the year  
+  
+... to be clear, if we have 5 years, with 52 weeks, then the difference between (2) and (35 is that for (2) we'd have 5 x 52 values to derive HML from, for (5) we would have 52 values (where each of these is the average of 5 points one for each year). Analogously for 1 vs 4, and 4 vs. 6.  
+
+There is also a question, which we glossed over which is how we turn these figures into HML. To date, I've cut them into quantiles (33rd), so an equal number of cases will end up in each of HML. 
+Another way to do it is to take the range of risk values and cut it into 3 equally-sized, or 3 unequally sized chunks. I have not thought through what the (dis)advantages of either approach are. **BUT IT IS A CHOICE** and we need to justify it.  
+
+
+Assuming we did the cutting in some way, we now have/can assign for  
+1. automatically a label whether it is HML  
+2. a label HML which will be the same for all days in that particular week (but NOT that week-of-the-year)  
+3. a label HML, same for all days in that particular month (...)  
+
+4. a label for each day based on its position as that specific day-of-the-year  
+5. a label for each day based on its position in that specific week-of-the-year, which means all days in that week have the same label  
+6. analogous to (5)  
+
+For (1), there is no real question that it's a fair approach, each day is assessed and labelled based on what percentile it falls into compared to all other days which preceded it. Since there is a lot of variability in the data on a daily level. In other words, days with broadly similar weather conditions (e.g. all 1 Jan) can have very different risk levels, because each day is assessed against all other days. Because the target variable may thus be different, but the other variables are expected to be broadly similar, it is hard to find good classification rules. 
+```{r}
+# --- DAY --- (with time variables)
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 751  49 141
+#          1 133  26  58
+#          2 280  32 265
+# 
+# Overall Statistics
+#                                              
+#                Accuracy : 0.6006             
+#                  95% CI : (0.5771, 0.6237)   
+#     No Information Rate : 0.6709             
+#     P-Value [Acc > NIR] : 1                  
+#                                              
+#                   Kappa : 0.2596    
+
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6452  0.24299   0.5711
+# Specificity            0.6673  0.88268   0.7545
+```
+
+Contrast this with approach 4, labelling each day in comparison to a range of values which has been observed historically for that specific day-in-the-year. Now a specific day in EACH year is labelled the same HML. Here we can't include a variable like 'day' in the explanatory set, because it would be perfectly predictive since the assignment is done on that basis. The same applies to week or month in the year, with some variability introduced only because the year doesn't always start on a Monday (or Sunday for you strange people who start the week then), and because one week or month may contain days which are not homogenous HML.  
+
+Think about it, if you know that 20 Dec is L, and you include week, then the classifer will just split on that basis and look for the ca. 51st week of the year. Taking out the time variables is thus appropriate, with the result as given below. Interestingly, this comes out similar to the one above. Note that going forward, in the absence of the time variables, the classifier has to use the other variables available, so in some sense they now serve as a proxy for the day-in-the-year.
+
+Perhaps the most pertinent question to ask here is whether, firstly, it is reasonable to assume that seasonal effects play out with such regularity *to the day* that it is appropriate to average the days across each year and, secondly, if that is so then why should we discard time, i.e. seasonality from the model and force it to guess the seasonal point via the weather?  
+
+```{r}
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 734  39 162
+#          1 131  28  59
+#          2 284  26 272
+# 
+# Overall Statistics
+#                                              
+#                Accuracy : 0.596              
+#                  95% CI : (0.5724, 0.6192)   
+#     No Information Rate : 0.6622             
+#     P-Value [Acc > NIR] : 1                  
+#                                              
+#                   Kappa : 0.2533             
+#                                              
+#  Mcnemar's Test P-Value : <0.0000000000000002
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6388  0.30108   0.5517
+# Specificity            0.6570  0.88429   0.7504
+```
+
+The same can be said about (5) and (6), i.e. we are assuming here that the seasonal effects for weeks or months are pretty constant across years, i.e. that they fall closely enough onto the respective week or month in each year.  
+
+The added complexity with looking at week and month (in 5,6 and 2,3) is that we're assuming each day in the historical data in a given week, month deserves the same HML. That is clearly not true as there are days with no strikes even weeks with very high strike days. So it's an approximation, **and we need to ask ourselves how good it is.**  
+
+This brings us back to the question of how good the mapping of risk -> HML is for any given day. The rank order is preserved by the cutting/assignment on the scale, but as soon as we assign weekly or monthly values, it is clear that we will be off, by definition, on every day of that week or month (because none of the individual values will be equal to the average, except under very rare circumstances). The models get better when one aggregates - probably because the variability in values on the independent variables for any given risk level is reduced compared to the daily mapping. **But how do we evaluate whether is is more appropriate to aggregate to week or month?** One idea might be that the better mapping should have a less variation around the average ... but I haven't really gotten my head around this yet.
+
+On to the final point. If we do aggregate to, say, month, should we tell the model what the day and week of the year are? In the historical data set there is a fairly direct mapping between day, week, and month, and the variabilty arises because of the start of the year, as mentioned above. If it were the case that week X always falls into Month Y, and all days in Month Y are H, then if you tell me week X I don't need any other variables to tell you that the individual days are H. However, approaches (2) and (3) leave open the possibility that month Y is not always H (analously for weeks), and this also introduces an element of uncertainty in the classification. 
+
+I think this is what we are seeing below, where DAY is included as a predictor, but not week or month. There is a strong correlation between the day and HML value, which is constant across a given month (and specific months in the different year will likely have the same HML, but this may not always be so.) Indeed, on a var importance plot, day comes out top. If one includes week as a predictor, the results are very similar ... because day and week or so tightly related.
+
+```{r}
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 506  66   6
+#          1  88 428  60
+#          2  15  66 499
+# 
+# Overall Statistics
+#                                               
+#                Accuracy : 0.8264              
+#                  95% CI : (0.8077, 0.844)     
+#     No Information Rate : 0.3512              
+#     P-Value [Acc > NIR] : < 0.0000000000000002
+#                                               
+#                   Kappa : 0.7396              
+#                                               
+#  Mcnemar's Test P-Value : 0.06333             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8309   0.7643   0.8832
+# Specificity            0.9360   0.8739   0.9307
+```
+
+
+What's wrong with this? I'm not quite sure. If we believe that all days in a month carry a certain risk level, then arguably this is a good model. Of course, the model will then also tend to assign the same risk level to all days in a specific month going forward ... but some days will end up different because the other variables also play a role.  
+
+I come back to what I said further up, I think the real question here may be whether that sort of approximation is good, i.e. whether it's reasonable to assume that risk is best aggregated by week, month, or n-days. At what level does seasonality most *reliably* reveal itself?  
+
+**To be clear, the criterion here should not be what produces the best classification result, but what our best understanding is of the data-generating process.**
+
+My thinking at this point is that 1,2,3 are preferrable to 4,5,6 for the simple reason that the latter forces all historical labels to be the same for the day, week, month of year. This is a strong assumption, i.e. that in each year the day, week or month did actually have the same HML. For day, I think this is just not true, for week it gets a bit more likely, and for month it may be pretty close... but that's a circular way back to the seasonality question ... but in the end, it may just be closer to reality to admit the possibility that in any given year in history June was not H (even though we haven't observed that). Finally, looking at the chart below, it's also clear that the month averages hide very large variation across the weeks (but then again, intra-week there is also some large jumps).
+
+Seasonal behaviour:
+
+```{r, echo=FALSE}
+
+d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH))
+
+xd <- d %>% mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>% 
+  group_by(DAY) %>% 
+  summarise(RATIOD=mean(RATIO)) %>% 
+  mutate(DATE = seq(ymd("2224-01-01"),ymd("2224-12-31"), by='1 day'),
+         WEEK = week(DATE), MONTH=month(DATE))
+xw <- d %>% mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>% 
+  group_by(WEEK) %>% 
+  summarise(RATIOW=mean(RATIO))
+xm <- d %>% mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>% 
+  group_by(MONTH) %>% 
+  summarise(RATIOM=mean(RATIO))
+
+xd<- left_join(xd,xw, by=c("WEEK"="WEEK"))
+xd <- left_join(xd,xm, by=c("MONTH"="MONTH"))
+
+ggplot(xd, aes(x=DAY,RATIOD)) + geom_line(alpha=0.5) + 
+  geom_point(aes(DAY,RATIOW), colour="blue", size = 1) + 
+  geom_point(aes(DAY, RATIOM), colour="red", size = 1)
+
+
+```
+
+
+```{r}
+
+
+# ignore all of this ... not documented in detail and need to re-run it
+
+
+# --- WEEK ---
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 445  79  34
+#          1 142 380  59
+#          2  39  89 467
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.7451               
+#                  95% CI : (0.7239, 0.7655)     
+#     No Information Rate : 0.361                
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.6179               
+#                                                
+#  Mcnemar's Test P-Value : 0.00002078           
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.7109   0.6934   0.8339
+# Specificity            0.8980   0.8305   0.8910
+
+
+
+
+
+# --- MONTH --- 
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 569   3   0
+#          1   0 577   5
+#          2   0   1 579
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.9948               
+#                  95% CI : (0.9902, 0.9976)     
+#     No Information Rate : 0.3368               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.9922               
+#                                                
+#  Mcnemar's Test P-Value : NA                   
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            1.0000   0.9931   0.9914
+# Specificity            0.9974   0.9957   0.9991
+
+# MONTH WITHOUT DAY, WEEK, MONTH VARS IN SET
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 415 101  32
+#          1 213 238 155
+#          2  30  91 459
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.6413               
+#                  95% CI : (0.6182, 0.6639)     
+#     No Information Rate : 0.3795               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.4637               
+#                                                
+#  Mcnemar's Test P-Value : 0.000000000003031    
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6307   0.5535   0.7105
+# Specificity            0.8764   0.7178   0.8888
+
+# Month based on month in year, without any time of year variables included
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 479  92   3
+#          1 201 217 163
+#          2  11 102 466
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.6701               
+#                  95% CI : (0.6474, 0.6922)     
+#     No Information Rate : 0.3985               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.5054               
+#                                                
+#  Mcnemar's Test P-Value : 0.0000000000008875   
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6932   0.5280   0.7373
+# Specificity            0.9089   0.7249   0.8975
+
+# Week based on week-of-year, no time variables
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 476  92   4
+#          1 220 209 135
+#          2   7  61 530
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.7007               
+#                  95% CI : (0.6785, 0.7222)     
+#     No Information Rate : 0.4054               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.5501               
+#                                                
+#  Mcnemar's Test P-Value : < 0.00000000000000022
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6771   0.5773   0.7922
+# Specificity            0.9069   0.7413   0.9362
+
+# by Day of the year, no time variables included
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 410 138  21
+#          1 253 140 193
+#          2  30  80 469
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.5877               
+#                  95% CI : (0.5641, 0.611)      
+#     No Information Rate : 0.3997               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.3823               
+#                                                
+#  Mcnemar's Test P-Value : < 0.00000000000000022
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.5916  0.39106   0.6867
+# Specificity            0.8473  0.67587   0.8953
+
+
+# Day of the year, with Day variable as predictor ... makes no sense as labels on test set are assigned to each day based on the Day variable, suspect
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 568   0   1
+#          1   0 586   0
+#          2   4   0 575
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.9971               
+#                  95% CI : (0.9933, 0.9991)     
+#     No Information Rate : 0.3379               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.9957               
+#                                                
+#  Mcnemar's Test P-Value : NA                   
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.9930   1.0000   0.9983
+# Specificity            0.9991   1.0000   0.9965
+
+```
+
