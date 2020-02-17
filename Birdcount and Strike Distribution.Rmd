@@ -1,0 +1,65 @@
+---
+title: "Bird and Strike distribution"
+author: "Project Team"
+date: "17/02/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(kableExtra)
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+```
+
+### Distribution of birdcounts
+The following plots exclude zeros and are limited to counts below 2,500, 5,000 and 10,000 for readability
+```{r, echo=FALSE}
+ggplot(data[data$BIRDCOUNT<2500 & data$BIRDCOUNT>0,], aes(x=BIRDCOUNT,fill=as.factor(STRIKE))) + 
+  geom_histogram(binwidth = 200) + 
+  scale_color_manual(values = c("#E69F11","#56B4E8"))
+
+ggplot(data[data$BIRDCOUNT<5000 & data$BIRDCOUNT>0,], aes(x=BIRDCOUNT,fill=as.factor(STRIKE))) + 
+  geom_histogram(binwidth = 200) + 
+  scale_color_manual(values = c("#E69F11","#56B4E8"))
+
+ggplot(data[data$BIRDCOUNT<10000 & data$BIRDCOUNT>0,], aes(x=BIRDCOUNT,fill=as.factor(STRIKE))) + 
+  geom_histogram(binwidth = 200) + 
+  scale_color_manual(values = c("#E69F11","#56B4E8"))
+
+```
+
+
+### Birdcounts vs. Chance of Strike
+Average chance of strike for each bucket of bird counts (1,000 increments) - no clear relationship across the range, although it would seem that days with extremely high bird observations do have a meaningfully larger chance, although as the table below the chart demonstrates, this is the result of only two data points.
+  
+  
+```{r, echo=FALSE, warning=FALSE}
+options(scipen=999)
+# Create buckets to group data
+data <- data %>% mutate(BIRDBUCKET = cut(BIRDCOUNT, 
+                                         breaks = seq(0,20000,1000), 
+                                         labels=paste("up to:",cumsum(diff(seq(0,20000,1000)))),
+                                         include.lowest = TRUE))
+# Calculate avearge strike % per bucket
+d <- data %>% mutate(RATIO = STRIKECOUNT/FLIGHTCOUNT) %>% group_by(BIRDBUCKET) %>% summarise(STRIKECHANCE=mean(RATIO))
+ggplot(d, aes(x=BIRDBUCKET,y=STRIKECHANCE)) + geom_bar(stat="identity") + coord_flip()
+```
+
+The above data in table form:
+```{r, echo=FALSE, warning=FALSE}
+d<-data %>% mutate(RATIO = STRIKECOUNT/FLIGHTCOUNT) %>% 
+  group_by(BIRDBUCKET) %>% summarise(N=n(), STRIKECHANCE=mean(RATIO), STRIKES=sum(STRIKECOUNT), FLIGHTS = sum(FLIGHTCOUNT))
+kable(d) %>% kable_styling(bootstrap_options = c("striped","hover", "condensed"))
+```
+
+
+### Distribution of Strikes
+Distribution of Strikes (first row=number of strikes, second row = number of data points with this many strikes)
+```{r, echo=FALSE}
+table(data$STRIKECOUNT)
+
+ggplot(data, aes(STRIKECOUNT)) + geom_histogram(binwidth=1)
+```
+
