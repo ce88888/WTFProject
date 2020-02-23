@@ -880,9 +880,11 @@ xgb.plot.importance(imp[1:20])
 # Different ways to define risk
 library(xgboost)
 library(caret)
-d <- data %>% filter(year(DATE) %in% 2000:2018) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+d <- data %>% filter(year(DATE) %in% c(2000:2005,2010:2018)) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
 d <- d %>% 
-  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH))
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
 
 ### --1-- Risk = percentile of mean strike chance across all days (not "days in year")
 ###       This attaches a label to each day based on how its strike chance ranks across all days in percentile terms
@@ -926,7 +928,7 @@ xQuantMonth <- left_join(d,x, by=c("YEAR"="YEAR", "MONTH"="MONTH"))
 ###       Label attached based on how risky this specific day was historically
 
 x <- d %>% 
-  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*1000) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>%
   group_by(DAY) %>%
   summarise(RATIO = mean(RATIO)) %>%
   mutate(RISK = .bincode(RATIO, breaks = quantile(RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)-1) %>%
@@ -938,7 +940,7 @@ xQuantDayHist <- left_join(d,x,by=c("DAY" = "DAY"))
 ###       Label attached to all days in a week based on how risky the specific week was historically
 
 x <- d %>% 
-  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*1000) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>%
   group_by(WEEK) %>%
   summarise(RATIO = mean(RATIO)) %>%
   mutate(RISK = .bincode(RATIO, breaks = quantile(RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)-1) %>%
@@ -946,17 +948,41 @@ x <- d %>%
 
 xQuantWeekHist <- left_join(d,x, by=c("WEEK"="WEEK"))  
 
-### --6-- Risk = percentile of average of strike chance across all weeks of the year
+### --6-- Risk = percentile of average of strike chance across all months of the year
 ###       Label attached to all days in a week based on how risky the specific week was historically
 
 x <- d %>% 
-  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*1000) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>%
   group_by(MONTH) %>%
   summarise(RATIO = mean(RATIO)) %>%
   mutate(RISK = .bincode(RATIO, breaks = quantile(RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)-1) %>%
   dplyr::select(-RATIO)
 
 xQuantMonthHist <- left_join(d,x, by=c("MONTH"="MONTH"))  
+
+
+### --7-- Risk = percentile of average of strike chance across all months of the year
+###       Label assigned to all days based on where they rank in that lookup
+
+x <- d %>% 
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIO = mean(RATIO)) %>%
+  mutate(RISK = cut(RATIO, breaks = quantile(RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)) %>%
+  mutate(RISK = gsub("^.|.$","", RISK)) %>%
+  separate(RISK, into=c("L","H"), sep=",", remove=FALSE) %>% 
+  mutate(L=as.numeric(L), H=as.numeric(H)) %>%
+  arrange(L) %>%
+  distinct(L, .keep_all = TRUE)
+
+# x is now a lookup table
+findInterval(0.64, x$L)
+
+# go through each data point and assign it based on the lookup
+d$RISK <- findInterval(d$RATIO, x$L)
+# FIX - BIG KLUDGE
+d$RISK <- ifelse(d$RISK == 0,0,d$RISK-1)
+xQuantDayMonthHist <- d
+
 
 #
 ggplot(xQuantMonthHist,aes(DAY,RATIO)) + geom_point() + coord_flip()
@@ -988,7 +1014,7 @@ ggplot(x[x$RATIO>0,], aes(x=as.factor(DAY),RATIO)) + geom_boxplot() + coord_flip
 ```{r}
 # prepare for xg,lgbm
 
-dd <- as.data.frame(xQuantWeek)
+dd <- as.data.frame(xQuantMonth)
 trainyn <- createDataPartition(dd$RISK, p=0.75, list=FALSE)
 dfTrain <- dd[trainyn,]
 dfTest <- dd[-trainyn,]
@@ -997,20 +1023,20 @@ rm(trainyn)
 ## time-in-year variables help reconstruct ... DAY is yday, so highly correlated to month
 ## ... isn't real question how good the risk level assignment is in terms of relating to actual strikes?
 
-xgTrain <- select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, YEAR, MONTH)) %>% 
+xgTrain <- dplyr::select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, RISK, YEAR, RATIO)) %>% 
   mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
          SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
 
-xgTest <- select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, YEAR, MONTH)) %>% 
+xgTest <- dplyr::select(dfTest, -c(DATE,STRIKECOUNT, STRIKE, RISK, YEAR, RATIO)) %>% 
   mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
          SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
 
 mXGB <- xgboost(
   data = as.matrix(xgTrain),
   label = as.matrix(dfTrain$RISK),
-  nfold = 5,
+  nfold = 7,
   showsd = T, stratified = T, print_every_n = 2,
-  nrounds = 50,
+  nrounds = 40,
   max_depth = 50,
   eta = 0.1,# step size shrinkage, learning rate
   nthread = 4,
@@ -1049,8 +1075,95 @@ y<- x %>% mutate(RATIO = (STRIKECOUNT/FLIGHTCOUNT)*10000) %>%
 
 imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
 xgb.plot.importance(imp[1:20])
+
+xgTest$ACTUAL = dfTest$RISK
+xgTest$PREDICTED = xgbMulti$RISK
+
+xgTest %>% group_by(DAY) 
+
+
+
 ```
 
+```{r}
+# Model seasonality
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+d <- data %>% filter(year(DATE) %in% 2000:2014) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
+
+x <- d %>% 
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000) %>%
+  group_by(MONTH) %>%
+  summarise(RATIOM = mean(RATIO)) #%>%  mutate(RISK = .bincode(RATIO, breaks = quantile(RATIO, probs = seq(0,1,1/3)), include.lowest=TRUE)-1)
+
+
+xM <- left_join(d,x, by=c("MONTH"="MONTH"))  
+
+ggplot(xM[xM$YEAR==2010,],aes(DATE,RATIO)) + geom_line() + geom_point(aes(DATE,RATIOM), colour="blue")
+
+xM$DELTA <- abs(xM$RATIOM-xM$RATIO)
+xM$RISK = .bincode(xM$DELTA,breaks = quantile(xM$DELTA, probs = seq(0,1,1/3)), include.lowest=TRUE)-1
+
+dd <- as.data.frame(xM)
+trainyn <- createDataPartition(xM$RISK, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+plot(xM$DELTA[xM$YEAR==2014])
+hist(xM$DELTA)
+
+xgTrain <- dplyr::select(dfTrain, -c(DATE,STRIKECOUNT,STRIKE, YEAR, RISK, RATIO, RATIOM, DELTA)) %>% 
+  mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- dplyr::select(dfTest, -c(DATE,STRIKECOUNT,STRIKE, YEAR, RISK, RATIO, RATIOM, DELTA)) %>% 
+  mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+mXGB <- xgboost(
+  data = as.matrix(xgTrain),
+  label = as.matrix(dfTrain$RISK),
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 2,
+  nrounds = 40,
+  max_depth = 50,
+  eta = 0.1,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+
+caret::confusionMatrix(as.factor(dfTest$RISK),xgbMulti$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+
+
+```
 
 
 
