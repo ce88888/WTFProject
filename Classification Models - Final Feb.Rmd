@@ -1,0 +1,308 @@
+---
+title: "Classification Models - Final February"
+author: "Christian Endter"
+date: "24/02/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(xgboost)
+
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+```
+
+```{r Data Preparation}
+d <- data %>% filter(year(DATE) %in% c(2008:2018)) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
+
+#### TEST with curtailed Strikecount
+dSub <- d %>% mutate(STRIKECOUNT = ifelse(STRIKECOUNT > 8, 8, STRIKECOUNT)) %>%
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
+xDayNO <- dSub %>% 
+  mutate(RISK = .bincode(RATIO, 
+                         breaks = c(0,min(RATIO) + (1:2)*(max(RATIO)-min(RATIO))/3,max(RATIO)), include.lowest=TRUE)-1,
+         RATIOP = RATIO)
+
+# table(d$STRIKE)
+# table(d$STRIKECOUNT)
+
+
+### --1-- Risk = percentile of mean strike chance across all days (not "days in year")
+###       This attaches a label to each day based on how its strike chance ranks across all days in percentile terms
+
+# calculate quantile across days
+xDay <- d %>% 
+  mutate(RISK = .bincode(RATIO, 
+                         breaks = c(0,min(RATIO) + (1:2)*(max(RATIO)-min(RATIO))/3,max(RATIO)), include.lowest=TRUE)-1,
+         RATIOP = RATIO)
+
+### --2-- Risk = percentile of mean strike chance across all weeks (not "week in year")
+###       Attaches a label to each day based on how its week's average ranks across all weeks in percentile terms
+
+# calculate quantile across weeks
+x<- d %>% 
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIOP = mean(RATIO)) %>%
+  mutate(RISK = .bincode(RATIOP, breaks = c(0,min(RATIOP) + (1:2)*(max(RATIOP)-min(RATIOP))/3,max(RATIOP)), include.lowest=TRUE)-1) 
+
+# match back to main data (i.e. label each day according to the group which its week belongs to)
+xWeek <- left_join(d,x, by=c("YEAR"="YEAR", "WEEK"="WEEK")) 
+
+### --3-- Risk = percentile of mean strike chance across all months (not "month in year")
+###       Attaches a label to each day based on how its month's average ranks across all months in percentile terms
+
+# calculate quantile across months
+x<- d %>% 
+  group_by(YEAR, MONTH) %>%
+  summarise(RATIOP = mean(RATIO)) %>%
+  mutate(RISK = .bincode(RATIOP, breaks = c(0,min(RATIOP) + (1:2)*(max(RATIOP)-min(RATIOP))/3,max(RATIOP)), include.lowest=TRUE)-1)
+
+# match back to main data (i.e. label each day according to the group which its week belongs to)
+xMonth <- left_join(d,x, by=c("YEAR"="YEAR", "MONTH"="MONTH")) 
+```
+
+```{r Helper functions}
+# Function returns list with train,test and weights, and clean train and test sets for xgBoost
+prepareTrainSplitByLevel <- function(data,pct=0.7){
+  trainObjects <- list()
+  dd <- as.data.frame(data)
+  trainyn <- createDataPartition(dd$RISK, p=pct, list=FALSE)
+  trainObjects$Train <- dd[trainyn,]
+  trainObjects$Test <- dd[-trainyn,]
+  counts <- table(trainObjects$Train$RISK)
+  w0 <- counts[3]/counts[1]
+  w1 <- counts[3]/counts[2]
+  w2 <- 1
+  trainObjects$Weights <- ifelse(trainObjects$Train$RISK==0,w0,
+                                 ifelse(trainObjects$Train$RISK==1,w1,
+                                        ifelse(trainObjects$Train$RISK==2,w2,-88))) #88 in case something's wrong
+  trainObjects$xgbTrain <- dplyr::select(trainObjects$Train, -c(DATE,STRIKECOUNT,STRIKE, RISK, YEAR, RATIO, RATIOP))
+  trainObjects$xgbTest <- dplyr::select(trainObjects$Test, -c(DATE,STRIKECOUNT,STRIKE, RISK, YEAR, RATIO, RATIOP))
+  return(trainObjects)
+}
+
+prepareCFMatrixSoftMax <- function(xgbModel, testData, correctLabels, numClasses=3){
+  predictedP <- predict(xgbModel, newdata = as.matrix(testData), type="raw")
+  multiProb <- matrix(predictedP, nrow=numClasses, ncol=length(predictedP)/numClasses) %>% 
+    t() %>% data.frame() %>%
+    mutate(RISK=factor(max.col(., ties.method = "last")-1, levels = c(0,1,2)))
+  return(caret::confusionMatrix(as.factor(correctLabels),multiProb$RISK))
+}
+```
+
+
+```{r xgBoost - DAY}
+
+xgbData <- prepareTrainSplitByLevel(xDayNO)
+xgbMatrix <- xgb.DMatrix(data=as.matrix(xgbData$xgbTrain), label=xgbData$Train$RISK, weight = xgbData$Weights)
+
+xgModelDay <- xgboost(xgbMatrix, 
+                      nfold = 7, showsd = T, stratified = T, print_every_n = 100, 
+                      nrounds = 1000, max_depth = 50, eta = 0.05,nthread = 4, "gamma" = 0, 
+                      objective = "multi:softprob", eval_metric = "merror",
+                      num_class = 3, min_child_weight = 1, subsample = 1, colsample_bytree = 1, save_period = NULL
+)
+
+# Confusion matrix
+prepareCFMatrixSoftMax(xgModelDay,xgbData$xgbTest,xgbData$Test$RISK)
+
+
+# Variable importance
+imp <- xgb.importance(feature_names = colnames(xgbData$xgbTrain), model = xgModelDay)
+xgb.plot.importance(imp[1:20])
+
+## OBSERVATIONS - accuracy seems to hover around 80%, dataset is weighted, but very few H observations -> SEE below for curtailed
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 956 193   9
+#          1  13  29   3
+#          2   0   1   1
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8183          
+#                  95% CI : (0.7953, 0.8396)
+#     No Information Rate : 0.8041          
+#     P-Value [Acc > NIR] : 0.1148          
+#                                           
+#                   Kappa : 0.175           
+#                                           
+#  Mcnemar's Test P-Value : <2e-16          
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1  Class: 2
+# Sensitivity            0.9866  0.13004 0.0769231
+# Specificity            0.1441  0.98371 0.9991611
+
+
+#### with curtailed data
+
+# xgbData$Train %>% group_by(RISK) %>% summarise(mean(RATIO), n())
+# # A tibble: 3 x 3
+#    RISK `mean(RATIO)` `n()`
+#   <dbl>         <dbl> <int>
+# 1     0          5.89  2585
+# 2     1         35.3    198
+# 3     2         60.3     30
+
+
+
+### Confusion Matrix, having set all STRIKECOUNT > 8 TO 8
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 991  95   5
+#          1  51  47   1
+#          2   6   8   1
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8622          
+#                  95% CI : (0.8415, 0.8812)
+#     No Information Rate : 0.8697          
+#     P-Value [Acc > NIR] : 0.7929255       
+#                                           
+#                   Kappa : 0.3189          
+#                                           
+#  Mcnemar's Test P-Value : 0.0003013       
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1  Class: 2
+# Sensitivity            0.9456  0.31333 0.1428571
+# Specificity            0.3631  0.95071 0.9883139
+
+
+```
+
+```{r xgBoost - WEEK}
+
+table(xWeek$RISK)
+
+xgbData <- prepareTrainSplitByLevel(xWeek)
+# newd<- upSample(xgbData$xgbTrain,as.factor(xgbData$Train$RISK))
+# newdR<-as.factor(newd$Class)
+# newd <- newd[,-ncol(newd)]
+xgbMatrix <- xgb.DMatrix(data=as.matrix(xgbData$xgbTrain), label=xgbData$Train$RISK, weight = xgbData$Weights)
+
+#xgbMatrix <- xgb.DMatrix(data=as.matrix(newd),label=newdR)
+
+xgModelWeek <- xgboost(xgbMatrix, 
+                      nfold = 7, showsd = T, stratified = T, print_every_n = 25, nrounds = 400,
+                      max_depth = 50, eta = 0.05, nthread = 4, "gamma" = 0, 
+                      objective = "multi:softprob", eval_metric = "merror",
+                      num_class = 3, min_child_weight = 1, subsample = 1, colsample_bytree = 1, save_period = NULL)
+
+# Confusion matrix
+prepareCFMatrixSoftMax(xgModelWeek,xgbData$xgbTest,xgbData$Test$RISK)
+
+# Variable importance
+imp <- xgb.importance(feature_names = colnames(xgbData$xgbTrain), model = xgModelWeek)
+xgb.plot.importance(imp[1:20])
+
+
+# xgbData$Train %>% group_by(RISK) %>% summarise(mean(RATIO), n())
+# # A tibble: 3 x 3
+#    RISK `mean(RATIO)` `n()`
+#   <dbl>         <dbl> <int>
+# 1     0          4.75  1993
+# 2     1         14.8    570
+# 3     2         27.9    250
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 760  71  16
+#          1  87 137  27
+#          2   4  32  71
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8033          
+#                  95% CI : (0.7797, 0.8254)
+#     No Information Rate : 0.7062          
+#     P-Value [Acc > NIR] : 9.648e-15       
+#                                           
+#                   Kappa : 0.5665          
+#                                           
+#  Mcnemar's Test P-Value : 0.02622         
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8931   0.5708  0.62281
+# Specificity            0.7542   0.8819  0.96700
+
+```
+
+```{r xgBoost - MONTH}
+
+table(xMonth$RISK)
+
+xgbData <- prepareTrainSplitByLevel(xMonth)
+xgbMatrix <- xgb.DMatrix(data=as.matrix(xgbData$xgbTrain), label=xgbData$Train$RISK, weight = xgbData$Weights)
+
+xgModelMonth <- xgboost(xgbMatrix, 
+                      nfold = 7, showsd = T, stratified = T, print_every_n = 25, nrounds = 400,
+                      max_depth = 50, eta = 0.05, nthread = 4, "gamma" = 0, 
+                      objective = "multi:softprob", eval_metric = "merror",
+                      num_class = 3, min_child_weight = 1, subsample = 1, colsample_bytree = 1, save_period = NULL)
+
+# Confusion matrix
+prepareCFMatrixSoftMax(xgModelMonth,xgbData$xgbTest,xgbData$Test$RISK)
+
+imp <- xgb.importance(feature_names = colnames(xgbData$xgbTrain), model = xgModelMonth)
+xgb.plot.importance(imp[1:20])
+
+# > xgbData$Train %>% group_by(RISK) %>% summarise(mean(RATIO), n())
+# # A tibble: 3 x 3
+#    RISK `mean(RATIO)` `n()`
+#   <dbl>         <dbl> <int>
+# 1     0          4.65  1766
+# 2     1         12.4    620
+# 3     2         21.5    427
+
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 702  52   2
+#          1  51 191  24
+#          2   2  20 161
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8747          
+#                  95% CI : (0.8547, 0.8929)
+#     No Information Rate : 0.6266          
+#     P-Value [Acc > NIR] : <2e-16          
+#                                           
+#                   Kappa : 0.7658          
+#                                           
+#  Mcnemar's Test P-Value : 0.9457          
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.9298   0.7262   0.8610
+# Specificity            0.8800   0.9204   0.9784
+
+```
+
