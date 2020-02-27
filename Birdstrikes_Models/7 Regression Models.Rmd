@@ -103,11 +103,14 @@ reg.data <-
       reg.data$PRCP == 99.99 | reg.data$PRCP_LAG_1 == 99.99
   ),]
 
+reg.data <-
+  reg.data %>% filter(reg.data$STRIKECOUNT < 8)
+
 valid.data <-
   reg.data[(reg.data$YEAR == 2019), ]
 
 reg.data <-
-  reg.data %>% filter(!reg.data$YEAR %in% c(1995, 1996, 1997, 1998, 1999, 2019))
+  reg.data %>% filter(!reg.data$YEAR %in% c(1995:2007, 2019))
 
 reg.data <- subset(reg.data, select = -c(DATE))
 
@@ -122,7 +125,7 @@ set.seed(500)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers <-
-  createDataPartition(reg.data$STRIKECOUNT, p = 0.75, list = FALSE)
+  createDataPartition(reg.data$STRIKECOUNT, p = 0.70, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.data <- reg.data[trainRowNumbers, ]
@@ -134,7 +137,7 @@ test.data <- reg.data[-trainRowNumbers, ]
 
 ```{r}
 reg.formula <-
-  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + DEWP + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT + MONTH + DAYOFWEEK
+  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + DEWP + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
 
 ```
 
@@ -454,97 +457,97 @@ check.valid.data <-
 
 ```{r XGBoost Regressor}
 
-# model.name <- "XGBoost Regressor"
-# rm(check.data, check.test.data, check.valid.data)
-# 
-# xgb.data <- rbind(reg.data, valid.data)
-# 
-# # one-hot-encoding categorical features
-# ohe_feats = c('MONTH', 'DAYOFWEEK', 'SEASON')
-# 
-# # Create dummies
-# dummies <- dummyVars(~ MONTH + DAYOFWEEK +  SEASON, data = xgb.data)
-# 
-# df.dummies <- as.data.frame(predict(dummies, newdata = xgb.data))
-# 
-# # Merge Dummies to data frame
-# xgb.data <-
-#   cbind(xgb.data[, -c(which(colnames(xgb.data) %in% ohe_feats))], df.dummies)
-# 
-# xgb.valid.data <-
-#   xgb.data[(xgb.data$YEAR == 2019), ]
-# 
-# xgb.data <-
-#   xgb.data %>% filter(!xgb.data$YEAR %in% c(2019))
-# 
-# xgb.data <- xgb.data %>% select(-c(YEAR))
-# 
-# xgb.valid.data <- xgb.valid.data %>% select(-c(YEAR))
-# 
-# # Create the training and test datasets
-# set.seed(1234)
-# 
-# # Step 1: Get row numbers for the training data
-# trainRowNumbers <-
-#   createDataPartition(xgb.data$STRIKECOUNT, p = 0.75, list = FALSE)
-# 
-# # Step 2: Create the training  dataset
-# train.data <- xgb.data[trainRowNumbers, ]
-# 
-# # Step 3: Create the test dataset
-# test.data <- xgb.data[-trainRowNumbers, ]
-# 
-# 
-# trcontrol.xgb = trainControl(
-#   method = "cv",
-#   number = 5,  
-#   allowParallel = TRUE,
-#   verboseIter = TRUE,
-#   returnData = TRUE
-# )
-# 
-# xgbGrid <-
-#   expand.grid(
-#     nrounds = c(100, 200),
-#     max_depth = c(10, 15, 20, 25),
-#     colsample_bytree = seq(0.1, 0.9, length.out = 5),
-#     eta = 0.1,
-#     gamma = 0,
-#     min_child_weight = 1,
-#     subsample = 1
-#   )
-# 
-# model.xgb = train(
-#    STRIKECOUNT ~  .,
-#   data = train.data,
-#   trControl = trcontrol.xgb,
-#   tuneGrid = xgbGrid,
-#   method = "xgbTree"
-# )
-# 
-# model.xgb$bestTune
-# 
-# model.xgb
-# 
-# # # predict on test data
-# # model.predictions <- round(predict(model.xgb, test.data))
-# # 
-# # model.metrics[nrow(model.metrics) + 1,] <-
-# #   saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
-# # 
-# # check.test.data <-
-# #   validate.models(model.xgb, model.predictions, test.data, model.name)
-# 
-# model.predictions <- predict(model.xgb, xgb.valid.data)
-# 
-# model.metrics[nrow(model.metrics) + 1, ] <-
-#   saveModelMetrics(model.predictions,
-#                    xgb.valid.data,
-#                    model.name,
-#                    "Validation Data")
-# 
-# check.valid.data <-
-#   validate.models(model.xgb, model.predictions, xgb.valid.data, model.name)
+model.name <- "XGBoost Regressor"
+rm(check.data, check.test.data, check.valid.data)
+
+xgb.data <- rbind(reg.data, valid.data)
+
+# one-hot-encoding categorical features
+ohe_feats = c('MONTH', 'DAYOFWEEK', 'SEASON')
+
+# Create dummies
+dummies <- dummyVars(~ MONTH + DAYOFWEEK +  SEASON, data = xgb.data)
+
+df.dummies <- as.data.frame(predict(dummies, newdata = xgb.data))
+
+# Merge Dummies to data frame
+xgb.data <-
+  cbind(xgb.data[, -c(which(colnames(xgb.data) %in% ohe_feats))], df.dummies)
+
+xgb.valid.data <-
+  xgb.data[(xgb.data$YEAR == 2019), ]
+
+xgb.data <-
+  xgb.data %>% filter(!xgb.data$YEAR %in% c(2019))
+
+xgb.data <- xgb.data %>% select(-c(YEAR))
+
+xgb.valid.data <- xgb.valid.data %>% select(-c(YEAR))
+
+# Create the training and test datasets
+set.seed(1234)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers <-
+  createDataPartition(xgb.data$STRIKECOUNT, p = 0.75, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- xgb.data[trainRowNumbers, ]
+
+# Step 3: Create the test dataset
+test.data <- xgb.data[-trainRowNumbers, ]
+
+
+trcontrol.xgb = trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE,
+  verboseIter = TRUE,
+  returnData = TRUE
+)
+
+xgbGrid <-
+  expand.grid(
+    nrounds = c(100, 200),
+    max_depth = c(10, 15, 20, 25),
+    colsample_bytree = seq(0.1, 0.9, length.out = 5),
+    eta = 0.1,
+    gamma = 0,
+    min_child_weight = 1,
+    subsample = 1
+  )
+
+model.xgb = train(
+   STRIKECOUNT ~  .,
+  data = train.data,
+  trControl = trcontrol.xgb,
+  tuneGrid = xgbGrid,
+  method = "xgbTree"
+)
+
+model.xgb$bestTune
+
+model.xgb
+
+# # predict on test data
+# model.predictions <- round(predict(model.xgb, test.data))
+#
+# model.metrics[nrow(model.metrics) + 1,] <-
+#   saveModelMetrics(model.predictions, test.data, model.name, "Test Data")
+#
+# check.test.data <-
+#   validate.models(model.xgb, model.predictions, test.data, model.name)
+
+model.predictions <- predict(model.xgb, xgb.valid.data)
+
+model.metrics[nrow(model.metrics) + 1, ] <-
+  saveModelMetrics(model.predictions,
+                   xgb.valid.data,
+                   model.name,
+                   "Validation Data")
+
+check.valid.data <-
+  validate.models(model.xgb, model.predictions, xgb.valid.data, model.name)
 
 ```
 

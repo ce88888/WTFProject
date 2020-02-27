@@ -4,9 +4,9 @@ author: "Team Strikes"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
   html_document:
-  code_folding: hide
-  highlight: pygment
-  theme: united
+    code_folding: hide
+    highlight: pygment
+    theme: united
 ---
 
 ```{r setup, include=FALSE}
@@ -101,8 +101,8 @@ class.data <-
   class.data[!(class.data$MXSPD == 999.9 |
                  class.data$PRCP == 99.99 | class.data$PRCP_LAG_1 == 99.99),]
 
-class.data$FOG <- as.numeric(class.data$FOG)
-class.data$SNOW_ICE <- as.numeric(class.data$SNOW_ICE)
+class.data$FOG <- as.factor(class.data$FOG)
+class.data$SNOW_ICE <- as.factor(class.data$SNOW_ICE)
 
 class.data$STRIKE <-
   as.factor(ifelse(class.data$STRIKE == 0, "NO", "YES"))
@@ -129,11 +129,11 @@ valid.cl.data <-
   class.data[(class.data$YEAR == 2019), ]
 
 class.data <-
-  class.data %>% filter(!class.data$YEAR %in% c(1995, 1996, 1997, 1998, 1999, 2019))
+  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2019))
 
-class.data <- subset(class.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE))
+class.data <- subset(class.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE, MONTH.12, STRIKECOUNT))
 
-valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE))
+valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE, MONTH.12, STRIKECOUNT))
 
 
 
