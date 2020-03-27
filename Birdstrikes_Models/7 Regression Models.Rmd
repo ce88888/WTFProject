@@ -101,16 +101,16 @@ reg.data <-
     reg.data$SLP == 9999.9 |
       reg.data$MXSPD == 999.9 |
       reg.data$PRCP == 99.99 | reg.data$PRCP_LAG_1 == 99.99
-  ),]
+  ), ]
 
 reg.data <-
   reg.data %>% filter(reg.data$STRIKECOUNT < 8)
 
 valid.data <-
-  reg.data[(reg.data$YEAR == 2019), ]
+  reg.data[(reg.data$YEAR %in% c(2018, 2019)),]
 
 reg.data <-
-  reg.data %>% filter(!reg.data$YEAR %in% c(1995:2007, 2019))
+  reg.data %>% filter(!reg.data$YEAR %in% c(1995:2007, 2018, 2019))
 
 reg.data <- subset(reg.data, select = -c(DATE))
 
@@ -137,7 +137,7 @@ test.data <- reg.data[-trainRowNumbers, ]
 
 ```{r}
 reg.formula <-
-  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + DEWP + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
+  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
 
 ```
 

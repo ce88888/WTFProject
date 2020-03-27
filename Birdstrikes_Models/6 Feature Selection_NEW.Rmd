@@ -257,13 +257,13 @@ varImp(fit)
 
 
 
-```{r Baruta}
+```{r Baruta, r fig1, fig.height = 6, fig.width = 6, fig.align = "center"}
 
 # Execute Boruta
 var.boruta <-
   Boruta(
     as.factor(STRIKE) ~
-      BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + DEWP + WDSP + VISIB + SLP + PRCP + SEASON + DAYOFWEEK + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL + THUNDER,
+      BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + WDSP + VISIB + SLP + PRCP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL + THUNDER,
     data = model.data.day,
     doTrace = 2
   )
@@ -373,14 +373,14 @@ VIF <-
 ```
 
 
-```{r VIF}
+```{r VIF, dpi=1500}
 set.seed(123)
 strikes.sample <-
   model.data.day[, c(
     "BIRDCOUNT",
     "FLIGHTCOUNT",
     "TEMP",
-    "DEWP",
+    # "DEWP",
     "SLP" ,
     "VISIB"  ,
     "WDSP" ,
@@ -449,6 +449,7 @@ glmStepAIC <-
 summary(glmStepAIC)
 varImp(glmStepAIC)
 plot(varImp(glmStepAIC))
+
 ```
 
 ```{r Random Forest Variable Importance}

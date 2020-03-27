@@ -91,7 +91,7 @@ class.data <- readRDS("KDEN_Class_Data_New.RDS")
 # Reorder data frame by Date 
 class.data <- class.data[order(class.data$DATE), ]
 
-class.data$PRCP_LAG_1 <- lag(class.data$PRCP, k = 1)
+# class.data$PRCP_LAG_1 <- lag(class.data$PRCP, k = 1)
 
 # class.data$TEMP_LAG_1 <- lag(class.data$TEMP, k = 1)
 
@@ -99,7 +99,8 @@ class.data <- class.data[complete.cases(class.data), ]
 
 class.data <-
   class.data[!(class.data$MXSPD == 999.9 |
-                 class.data$PRCP == 99.99 | class.data$PRCP_LAG_1 == 99.99),]
+                 class.data$PRCP == 99.99), ] 
+#| class.data$PRCP_LAG_1 == 99.99)
 
 class.data$FOG <- as.factor(class.data$FOG)
 class.data$SNOW_ICE <- as.factor(class.data$SNOW_ICE)
@@ -126,10 +127,10 @@ class.data <-
 
 
 valid.cl.data <-
-  class.data[(class.data$YEAR == 2019), ]
+  class.data[(class.data$YEAR %in% c(2018,2019)), ]
 
 class.data <-
-  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2019))
+  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2018, 2019))
 
 class.data <- subset(class.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE, MONTH.12, STRIKECOUNT))
 

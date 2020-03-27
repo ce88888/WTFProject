@@ -121,8 +121,16 @@ t.data <- class.data %>%
     RATIO,
     breaks = quantile(RATIO, probs = seq(0, 1, 1 / 3)),
     include.lowest = TRUE
-  ) - 1) %>%
-  dplyr::select(-RATIO)
+  ) - 1)
+
+t.data <- t.data %>%
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIOP = mean(RATIO)) %>%
+  mutate(RISK = .bincode(
+    RATIOP,
+    breaks = c(0, min(RATIOP) + (1:2) * (max(RATIOP) - min(RATIOP)) / 3, max(RATIOP)),
+    include.lowest = TRUE
+  ) - 1)
 
 class.data <-
   left_join(class.data, t.data, by = c("YEAR" = "YEAR", "WEEK" = "WEEK"))
@@ -149,16 +157,48 @@ class.data <-
 
 
 valid.cl.data <-
-  class.data[(class.data$YEAR == 2019), ]
+  class.data[(class.data$YEAR %in% c(2018:2019)), ]
 
 class.data <-
-  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2019))
+  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2018:2019))
 
-class.data <- subset(class.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, MONTH.12))
+class.data <- subset(class.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP))
 
-valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SEASON, MXSPD, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, MONTH.12))
+valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP))
+# MXSPD
+```
+
+```{r Baruta, r fig1, fig.height = 2, fig.width = 4, fig.align = "center"}
+
+# Execute Boruta
+var.boruta <-
+  Boruta(
+    as.factor(RISK) ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + MXSPD + VISIB + PRCP + FOG,
+    data = class.data,
+    doTrace = 2
+  )
+
+# Plot importance based on the Z Scores
+lz <- lapply(1:ncol(var.boruta$ImpHistory), function(i)
+  var.boruta$ImpHistory[is.finite(var.boruta$ImpHistory[, i]), i])
+names(lz) <- colnames(var.boruta$ImpHistory)
+Labels <- sort(sapply(lz, median))
+plot(
+  var.boruta,
+  side = 1,
+  las = 2,
+  labels = names(Labels),
+  at = 1:ncol(var.boruta$ImpHistory),
+  cex.axis = 0.7
+)
+final.boruta <- TentativeRoughFix(var.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+boruta.df <- attStats(final.boruta)
+print(boruta.df)
 
 ```
+
+
 
 ```{r}
 # Create the training and test datasets
@@ -189,7 +229,7 @@ validateAndPrintResult <- function(model, data) {
   
   ## get ROC
   
-  res$roc
+  # res$roc
   
   ## get calibration curve
   
@@ -203,6 +243,9 @@ validateAndPrintResult <- function(model, data) {
   predicted.resp <- predict(model, data)
   head(predicted.resp)
   
+  predictions <- as.numeric(predict(model, data, type = 'raw'))
+  multiclass.roc(data$RISK, predictions)
+  
   caret::confusionMatrix(
     reference = as.factor(data$RISK),
     data = predicted.resp,
@@ -212,7 +255,6 @@ validateAndPrintResult <- function(model, data) {
 }
 
 ```
-
 
 
 ```{r}
@@ -243,13 +285,13 @@ glmnetGridElastic <-
   expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
 
 
-gbm.tune.grid <-
-  expand.grid(
-    n.trees = c(400),
-    interaction.depth = c(1, 3, 5),
-    shrinkage = c(.01, .1, .3),
-    n.minobsinnode = c(5, 10, 15)
-  )
+# gbm.tune.grid <-
+#   expand.grid(
+#     n.trees = c(400),
+#     interaction.depth = c(1, 3, 5),
+#     shrinkage = c(.01, .1, .3),
+#     n.minobsinnode = c(5, 10, 15)
+#   )
 
 
 set.seed(333)
@@ -273,7 +315,7 @@ modelList <- caretList(
                               tuneGrid = multinom.grid), 
     
     ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
-    
+
     xgbTree = caretModelSpec(
       method = "xgbTree",
       tuneGrid = xgbTreeGrid,
@@ -291,7 +333,7 @@ modelList <- caretList(
     ),
     # rf
 
-    gbm = caretModelSpec(method = "gbm", tuneGrid = gbm.tune.grid)
+    gbm = caretModelSpec(method = "gbm") #, tuneGrid = gbm.tune.grid
     
   )
 )
@@ -301,7 +343,7 @@ modelList <- caretList(
 
 ```{r}
 
-validateAndPrintResult(modelList$multinom, test.data)
+# validateAndPrintResult(modelList$multinom, test.data)
 
 validateAndPrintResult(modelList$multinom, valid.cl.data)
 
@@ -310,7 +352,7 @@ validateAndPrintResult(modelList$multinom, valid.cl.data)
 
 ```{r}
 
-validateAndPrintResult(modelList$xgbTree, test.data)
+# validateAndPrintResult(modelList$xgbTree, test.data)
 
 validateAndPrintResult(modelList$xgbTree, valid.cl.data)
 
@@ -319,7 +361,7 @@ validateAndPrintResult(modelList$xgbTree, valid.cl.data)
 
 ```{r}
 
-validateAndPrintResult(modelList$glmnet, test.data)
+# validateAndPrintResult(modelList$glmnet, test.data)
 
 validateAndPrintResult(modelList$glmnet, valid.cl.data)
 
@@ -328,13 +370,13 @@ validateAndPrintResult(modelList$glmnet, valid.cl.data)
 ```{r}
 
 
-validateAndPrintResult(modelList$rf, test.data)
+# validateAndPrintResult(modelList$rf, test.data)
 
 validateAndPrintResult(modelList$rf, valid.cl.data)
 ```
 
 ```{r}
-validateAndPrintResult(modelList$gbm, test.data)
+# validateAndPrintResult(modelList$gbm, test.data)
 
 validateAndPrintResult(modelList$gbm, valid.cl.data)
 
