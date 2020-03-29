@@ -11,6 +11,8 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+setwd("G:/My Drive/Github/WTFProject")
 ```
 
 ```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
@@ -34,27 +36,32 @@ for(package in packages){
   library(package, character.only = TRUE)
 }
 
+
+
+
 ```
 
 
-```{r}
-# weather <- read_excel("Weather.xls")
-# 
-# weather$DATE <- ymd(weather$DATE)
-# 
-# weather[2:11] <- sapply(weather[2:11], as.numeric)
-# 
-# weather[12:17] <- lapply(weather[12:17], factor)
-# 
-# ### Save the file
-# saveRDS(weather,"KDEN_Weather_New.RDS")
+```{r Weather File Load}
+
+getwd()
+weather <- read_excel("Weather.xls")
+
+weather$DATE <- ymd(weather$DATE)
+
+weather[2:11] <- sapply(weather[2:11], as.numeric)
+
+weather[12:17] <- lapply(weather[12:17], factor)
+
+### Save the file
+saveRDS(weather,"KDEN_Weather_New.RDS")
 
 ```
 
 ```{r}
 # birdcount <- read_csv("birdCount_1992_2019.csv")
 # 
-# birdcount <- birdcount %>% filter(milesFromAirport < 10)
+# birdcount <- birdcount %>% filter(milesFromAirport < 10) --- update 3/28 removed all of them from the import -tk
 # 
 # birdcount$obsDt <- as.Date(birdcount$obsDt, format = "%m/%d/%y")
 # 
@@ -68,6 +75,8 @@ for(package in packages){
 # 
 # ### Save the file
 # saveRDS(birdcount,"KDEN_BirdCount_New.RDS")
+
+
 ```
 
 ```{r}
@@ -107,6 +116,8 @@ data_f <- data_f %>%
 
 ```{r}
 strikes <- tibble(DATE = seq(ymd("1995-03-01"),ymd("2019-10-31"), by= "days")) 
+
+#update to 1/1/2000
 ```
 
 ```{r}
