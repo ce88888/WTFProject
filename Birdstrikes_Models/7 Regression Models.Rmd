@@ -135,14 +135,14 @@ test.data <- reg.data[-trainRowNumbers, ]
 
 ```
 
-```{r}
+```{r Regression Formula}
 reg.formula <-
   STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
 
 ```
 
 
-```{r}
+```{r Model Metrics Data Frame }
 
 model.metrics <-
   data.frame(
@@ -157,7 +157,17 @@ model.metrics <-
 
 ```
 
-```{r}
+```{r Functions}
+
+pred.check<- function (check.valid.data,model.name) {
+  pred.fail<- check.valid.data %>%  
+    select(STRIKECOUNT,
+           round.model.predictions.,model.predictions) %>% 
+    mutate("check" = round.model.predictions. == STRIKECOUNT,
+           model.name = model.name)
+  return(pred.fail)
+  
+}
 
 saveModelMetrics <-
   function(model.predictions,
@@ -204,7 +214,6 @@ saveModelMetrics <-
   }
 
 ```
-
 
 
 ```{r Validate Model Function}
@@ -278,7 +287,7 @@ validate.models <- function(model, model.predictions, data, model.name) {
   return(check.data)
 }
 ```
-
+#Models 
 ```{r Linear Regression}
 # Linear Regression
 
@@ -316,6 +325,11 @@ model.metrics[nrow(model.metrics) + 1, ] <-
 
 check.valid.data <-
   validate.models(model.lm, model.predictions, valid.data, model.name)
+
+#Creates a prediction table that checks how many are false where we failed to predict a strike totaling 75
+
+pred.glm<-pred.check(check.valid.data,model.name)
+pred.glm
 
 ```
 
@@ -359,6 +373,9 @@ model.metrics[nrow(model.metrics) + 1,] <-
 
 check.valid.data <-
     validate.models(model.glm.nb, model.predictions, valid.data, model.name)
+
+pred.nb<-pred.check(check.valid.data,model.name)
+pred.nb
 
 ```
 
@@ -408,10 +425,14 @@ model.metrics[nrow(model.metrics) + 1, ] <-
 check.valid.data <-
   validate.models(model.rf, model.predictions, valid.data, model.name)
 
+pred.rf<-pred.check(check.valid.data,model.name)
+pred.rf
+
+
 ```
 
 ```{r SVM Regression}
-# Random Forest
+#SVM Linear Regressor
 
 model.name <- "SVM Linear Regressor"
 rm(check.data, check.test.data, check.valid.data)
@@ -452,12 +473,15 @@ model.metrics[nrow(model.metrics) + 1, ] <-
 check.valid.data <-
   validate.models(model.svm, model.predictions, valid.data, model.name)
 
+pred.svm<-pred.check(check.valid.data,model.name)
+pred.svm
+
 ```
 
 
 ```{r XGBoost Regressor}
-
 model.name <- "XGBoost Regressor"
+
 rm(check.data, check.test.data, check.valid.data)
 
 xgb.data <- rbind(reg.data, valid.data)
@@ -466,30 +490,32 @@ xgb.data <- rbind(reg.data, valid.data)
 ohe_feats = c('MONTH', 'DAYOFWEEK', 'SEASON')
 
 # Create dummies
+
 dummies <- dummyVars(~ MONTH + DAYOFWEEK +  SEASON, data = xgb.data)
 
 df.dummies <- as.data.frame(predict(dummies, newdata = xgb.data))
 
 # Merge Dummies to data frame
+
 xgb.data <-
   cbind(xgb.data[, -c(which(colnames(xgb.data) %in% ohe_feats))], df.dummies)
 
 xgb.valid.data <-
-  xgb.data[(xgb.data$YEAR == 2019), ]
+  xgb.data[(xgb.data$YEAR %in% c(2018,2019)), ]
 
 xgb.data <-
-  xgb.data %>% filter(!xgb.data$YEAR %in% c(2019))
+  xgb.data %>% filter(!xgb.data$YEAR %in% c(2018, 2019))
 
 xgb.data <- xgb.data %>% select(-c(YEAR))
 
 xgb.valid.data <- xgb.valid.data %>% select(-c(YEAR))
 
 # Create the training and test datasets
-set.seed(1234)
+set.seed(500)
 
 # Step 1: Get row numbers for the training data
 trainRowNumbers <-
-  createDataPartition(xgb.data$STRIKECOUNT, p = 0.75, list = FALSE)
+  createDataPartition(xgb.data$STRIKECOUNT, p = 0.70, list = FALSE)
 
 # Step 2: Create the training  dataset
 train.data <- xgb.data[trainRowNumbers, ]
@@ -549,6 +575,9 @@ model.metrics[nrow(model.metrics) + 1, ] <-
 check.valid.data <-
   validate.models(model.xgb, model.predictions, xgb.valid.data, model.name)
 
+pred.xgb<-pred.fail(check.valid.data,model.name)
+pred.xgb
+
 ```
 
 
@@ -566,8 +595,34 @@ datatable(
 ) 
 ```
 
+```{r Prediction Code }
+
+head(pred.nb)
+#Combining the Predicted Values
+pred.models<- rbind(pred.nb,pred.rf,pred.svm,pred.xgb, pred.glm) %>%
+  select(model.name,check,STRIKECOUNT,round.model.predictions.,model.predictions)
+
+#Summary Table of the outputted strikes 
+View(pred.models)
+pred.models %>% 
+  dplyr::group_by(check,model.name) %>% 
+  tally() %>% 
+  arrange(-check,-n)
+
+#Summary of false strikes where a strike is not predicted 
+pred.models %>% 
+  filter(check == FALSE,
+         STRIKECOUNT > round.model.predictions.) %>% 
+  dplyr::group_by(model.name) %>% 
+  tally() %>% 
+  arrange(-n)
 
 
+```
+
+
+
+#Commented Code is for Auto AML- Do not remove
 ```{r}
 # models.reg <- c( "glm", "lm","glmnet", "glmboost", "bayesglm", "rf")
 # 
@@ -701,7 +756,6 @@ datatable(
 # nfolds <- 5
 ```
 
-
 ```{r}
 # # Use AutoML to find a list of candidate models (i.e., leaderboard)
 # auto_ml <- h2o.automl(
@@ -734,7 +788,4 @@ datatable(
 
 ```
 
-```{r}
-
-```
 
