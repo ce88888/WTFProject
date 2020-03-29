@@ -1,0 +1,202 @@
+---
+title: "Data Creation_Day"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'dplyr',
+  'lubridate',
+  'magrittr',
+  'tidyverse',
+  'readxl',
+  'zoo'
+)
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+
+
+
+```
+
+
+```{r Weather File Load}
+
+weather <- read_csv("DFW/w_DFW.csv") 
+View(weather)
+#converts the date column into date 
+weather$YEARMODA <- ymd(weather$YEARMODA)
+
+#corrects the precip Column
+# weather$PRCP <- weather %>% 
+#   mutate(PRCP = substr(PRCP, 1, 4))
+
+#converts all of the columns to numeric 
+weather[2:11] <- sapply(weather[2:11], as.numeric, 
+                        na.rm= TRUE)
+
+weather[11:16] <- lapply(weather[12:16], factor)
+
+#sapply(weather,class)
+
+### Save the file
+ saveRDS(weather,"DFW_Weather.RDS")
+
+```
+
+```{r}
+# birdcount <- read_csv("birdCount_1992_2019.csv")
+# 
+# birdcount <- birdcount %>% filter(milesFromAirport < 10) --- update 3/28 removed all of them from the import -tk
+# 
+# birdcount$obsDt <- as.Date(birdcount$obsDt, format = "%m/%d/%y")
+# 
+# birdcount <-
+#   birdcount %>% group_by(obsDt) %>% summarise(BIRDCOUNT = sum(howMany))
+# 
+# birdcount$BIRDCOUNT[is.na(birdcount$BIRDCOUNT)] <- 0
+# 
+# birdcount <-
+#   birdcount %>% dplyr::rename(DATE = obsDt)
+# 
+# ### Save the file
+# saveRDS(birdcount,"KDEN_BirdCount_New.RDS")
+
+
+```
+
+```{r}
+# faa <- read_xlsx("Strikes_02132020.xlsx")
+# 
+# faa['STRIKE'] <- 1
+# 
+# faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
+# 
+# faa <- faa %>% filter(HEIGHT <= 2000)
+# 
+# faa <- faa %>% group_by(INCIDENT_DATE, STRIKE) %>% summarise(STRIKECOUNT = sum(STRIKE))
+# 
+# faa$DATE <- as.Date(faa$DATE, '%Y-%m-%d')
+# 
+# faa <-
+#   faa %>% dplyr::rename(DATE = INCIDENT_DATE)
+# 
+# ### Save the file
+# saveRDS(birdcount,"KDEN_Faa_New.RDS")
+
+```
+
+
+
+```{r Loading the input files, filtering}
+### Note - assumes these have been cleaned already and and contain a DATE and RTIME field
+data_w <- readRDS("KDEN_Weather_New.RDS")
+data_f <- readRDS("KDEN Flights.RDS")
+data_b <- readRDS("KDEN_BirdCount_New.RDS")
+data_faa <- readRDS("KDEN_Faa_New.RDS")
+
+data_f <- data_f %>%
+  dplyr::select(-c(`AIRPORT ID`, RTIME, ARRIVALS, DEPARTURES))
+
+```
+
+```{r}
+strikes <- tibble(DATE = seq(ymd("1995-03-01"),ymd("2019-10-31"), by= "days")) 
+
+#update to 1/1/2000
+```
+
+```{r}
+
+data_b <- data_b %>%
+  group_by(DATE) %>%
+  summarise(BIRDCOUNT = sum(BIRDCOUNT))
+
+strikes <-
+  left_join(strikes, data_b , by = c("DATE" = "DATE"))
+```
+
+
+```{r}
+
+data_f <- data_f %>%
+  group_by(DATE) %>%
+  summarise(TOTAL = sum(TOTAL))
+
+strikes <-
+  left_join(strikes, data_f , by = c("DATE" = "DATE"))
+```
+
+```{r}
+strikes <-
+  left_join(strikes, data_w , by = c("DATE" = "DATE"))
+
+```
+
+```{r}
+strikes <-
+  left_join(strikes, faa , by = c("DATE" = "DATE"))
+```
+
+
+```{r}
+strikes <- cbind(
+  strikes,
+  data.frame(
+    YEAR = as.factor(format(strikes$DATE, format = "%Y")),
+    MONTH = as.factor(format(strikes$DATE, format = "%m")),
+    DAYOFWEEK = as.factor(format(strikes$DATE, format = "%A")),
+    SEASON = as.factor(factor(
+      format(as.yearqtr(
+        as.yearmon(strikes$DATE, "%m/%d/%Y") + 1 / 12
+      ), "%q"),
+      levels = 1:4,
+      labels = c("winter", "spring", "summer", "fall")
+    ))
+  )
+)
+
+strikes$STRIKE[is.na(strikes$STRIKE)] <- 0
+  
+strikes$STRIKECOUNT[is.na(strikes$STRIKECOUNT)] <- 0
+
+strikes$BIRDCOUNT[is.na(strikes$BIRDCOUNT)] <- 0
+
+strikes <- strikes %>% select(-c(SNDP, GUST, STP, TORNADO_FUNNELCLOUD))
+
+strikes <-
+  strikes %>% dplyr::rename(FLIGHTCOUNT = TOTAL)
+
+```
+
+
+```{r}
+# Check for NAs in all columns
+colSums(is.na(strikes))
+```
+
+```{r}
+### Save the file
+saveRDS(strikes,"KDEN_FINAL_NEW.RDS")
+```
+
