@@ -46,10 +46,13 @@ for(package in packages){
 
 #weather <- read_csv("DFW/w_DFW.csv") #this doesn't need the precip code 
 #weather <- read_csv("ORD/w_ORD.csv") 
-weather <- read_csv("SMF/w_SMF.csv") 
+#weather <- read_csv("SMF/w_SMF.csv") 
 
+weather <- read_xls("KDEN/w_DEN.xls") 
+
+names(weather)
 #View(weather)
-#converts the date column into date 
+#converts the date column into date (for non KDEN)
 weather<- weather %>% 
   dplyr::rename(DATE = YEARMODA)
 
@@ -57,14 +60,14 @@ weather<- weather %>%
 weather$DATE <- ymd(weather$DATE)
 
 #corrects the precip Column
-weather <- weather %>%
-  mutate(PRCP = substr(PRCP, 1, 4))
+# weather <- weather %>%
+#   mutate(PRCP = substr(PRCP, 1, 4))
 
-#converts all of the columns to numeric 
+#converts all of the columns to numeric up until precip
 weather[2:11] <- sapply(weather[2:11], as.numeric, 
                         na.rm= TRUE)
-
-weather[11:16] <- lapply(weather[12:16], factor)
+#converts all the columns to factor for the remaining column 
+weather[11:17] <- lapply(weather[12:16], factor)
 
 
 sapply(weather,class)
@@ -76,7 +79,9 @@ weather<- weather %>%
 
 #saveRDS(weather,"DFW/DFW_Weather.RDS")
 #saveRDS(weather,"ORD/ORD_Weather.RDS")
-saveRDS(weather,"SMF/SMF_Weather.RDS")
+#saveRDS(weather,"SMF/SMF_Weather.RDS")
+saveRDS(weather,"KDEN/KDEN_Weather.RDS")
+
 
 ```
 
@@ -178,26 +183,22 @@ data_flights <- rbind(data_arrivals,data_departures)
 
 data_flights$DATE <- ymd(data_flights$DATE)
 
-
 data_flights <- data_flights %>% 
   select(-AD) %>% 
   dplyr::group_by(DATE) %>% 
   summarise(TOTAL = sum(ARRIVALS,DEPARTURES))
 rm(data_arrivals, data_departures)
 
-
-
 # # Convert time field to rounded hours for subsequent matching
 # data_flights$`AIRPORT ID` <- "DFW"
-#  data_flights$`AIRPORT ID` <- "ORD"
- data_flights$`AIRPORT ID` <- "SMF"
+# data_flights$`AIRPORT ID` <- "ORD"
+# data_flights$`AIRPORT ID` <- "SMF"
 
 sapply(data_flights,class)
 
 # saveRDS(data_flights,"DFW/DFW_Flights.RDS")
 # saveRDS(data_flights,"ORD/ORD_Flights.RDS")
- saveRDS(data_flights,"SMF/SMF_Flights.RDS")
- 
+# saveRDS(data_flights,"SMF/SMF_Flights.RDS")
  
 ```
 
@@ -217,10 +218,16 @@ sapply(data_flights,class)
 # data_b <- readRDS("ORD/ORD_BirdCount.RDS")
 # data_faa <- readRDS("ORD/ORD_FAA.RDS")
 
-data_w <- readRDS("SMF/SMF_Weather.RDS")
-data_f <- readRDS("SMF/SMF_Flights.RDS")
-data_b <- readRDS("SMF/SMF_BirdCount.RDS")
-data_faa <- readRDS("SMF/SMF_FAA.RDS")
+# data_w <- readRDS("SMF/SMF_Weather.RDS")
+# data_f <- readRDS("SMF/SMF_Flights.RDS")
+# data_b <- readRDS("SMF/SMF_BirdCount.RDS")
+# data_faa <- readRDS("SMF/SMF_FAA.RDS")
+
+data_w <- readRDS("KDEN/KDEN_Weather.RDS")
+data_f <- readRDS("KDEN/KDEN flights.RDS")
+data_b <- readRDS("KDEN/KDEN_BirdCount.RDS")
+data_faa <- readRDS("KDEN/KDEN_FAA.RDS")
+
 
 ```
 
@@ -257,7 +264,6 @@ strikes <-
 strikes <-
   left_join(strikes, data_w , by = c("DATE" = "DATE"))
 strikes
-
 
 ```
 
@@ -300,9 +306,33 @@ colSums(is.na(strikes))
 
 ```{r}
 ### Save the file
-#saveRDS(strikes,"DFW/DFW_FINAL.RDS")
-#saveRDS(strikes,"ORD/ORD_FINAL.RDS")
-saveRDS(strikes,"SMF/SMF_FINAL.RDS")
+
+SMF <- readRDS("SMF/SMF_FINAL.RDS")
+ORD <- readRDS("ORD/ORD_FINAL.RDS")
+DFW <- readRDS("DFW/DFW_FINAL.RDS")
+KDEN <- readRDS("KDEN/KDEN_FINAL.RDS")
+
+KDEN$`AIRPORT ID` <- "KDEN"
+KDEN<-KDEN %>% 
+  rename(TOTAL = FLIGHTCOUNT) %>% 
+  select(DATE,BIRDCOUNT,TOTAL,`AIRPORT ID`,TEMP,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,STRIKE,STRIKECOUNT,YEAR,MONTH,DAYOFWEEK,SEASON)
+
+master.data<-data_flights <- rbind(SMF,ORD)
+master.data<-data_flights <- rbind(master.data,DFW)
+
+master.data <- 
+  master.data %>% 
+  select(-TORNADO_FUNNELCLOUD)
+
+master.data<-data_flights <- rbind(master.data,KDEN)
+
+master.data <- 
+  master.data %>% 
+  select(DATE,`AIRPORT ID`,STRIKE,STRIKECOUNT,BIRDCOUNT,TOTAL,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,YEAR,MONTH,DAYOFWEEK,SEASON)
+
+master.data
+
+saveRDS(master.data,"AIRFIELDS_MASTER.RDS")
 
 
 ```
