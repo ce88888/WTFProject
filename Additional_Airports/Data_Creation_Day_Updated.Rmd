@@ -1,0 +1,309 @@
+---
+title: "Data Creation_Day"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+options(warn=-1)
+
+```
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'dplyr',
+  'lubridate',
+  'magrittr',
+  'tidyverse',
+  'readxl',
+  'zoo'
+)
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+```
+
+#Loading & Saving Source Files 
+
+```{r Weather File Load}
+###### Uncomment to run for the airport required 
+
+#weather <- read_csv("DFW/w_DFW.csv") #this doesn't need the precip code 
+#weather <- read_csv("ORD/w_ORD.csv") 
+weather <- read_csv("SMF/w_SMF.csv") 
+
+#View(weather)
+#converts the date column into date 
+weather<- weather %>% 
+  dplyr::rename(DATE = YEARMODA)
+
+#convert to Date 
+weather$DATE <- ymd(weather$DATE)
+
+#corrects the precip Column
+weather <- weather %>%
+  mutate(PRCP = substr(PRCP, 1, 4))
+
+#converts all of the columns to numeric 
+weather[2:11] <- sapply(weather[2:11], as.numeric, 
+                        na.rm= TRUE)
+
+weather[11:16] <- lapply(weather[12:16], factor)
+
+
+sapply(weather,class)
+
+weather<- weather %>% 
+  select(-GUST, -STP)
+
+###### Uncomment to run for the airport required -SAVE
+
+#saveRDS(weather,"DFW/DFW_Weather.RDS")
+#saveRDS(weather,"ORD/ORD_Weather.RDS")
+saveRDS(weather,"SMF/SMF_Weather.RDS")
+
+```
+
+```{r Birdcount Load }
+
+###### Uncomment to run for the airport required 
+
+# birdcount <- read_csv("DFW/birdCount_Aggregated_DFW.csv")
+# birdcount <- read_csv("ORD/birdCount_Aggregated_ORD.csv")
+ birdcount <- read_csv("SMF/birdCount_Aggregated_SMF.csv")
+
+
+#--- update 3/28 removed all of them from the import -tk
+    #birdcount <- birdcount %>% filter(milesFromAirport < 10) 
+#Correct the names of the file 
+names(birdcount)<-c("DATE","BIRDCOUNT")
+
+#convert to date format 
+birdcount$DATE <- as.Date(birdcount$DATE, format = "%m/%d/%y")
+
+#already grouped by day
+# birdcount <-
+#   birdcount %>% group_by(DATE) %>% summarise(BIRDCOUNT = sum(howMany))
+
+birdcount$BIRDCOUNT[is.na(birdcount$BIRDCOUNT)] <- 0
+
+#checking class 
+sapply(birdcount,class)
+
+###### Uncomment to run for the airport required -SAVE
+# saveRDS(birdcount,"DFW/DFW_BirdCount.RDS")
+# saveRDS(birdcount,"ORD/ORD_BirdCount.RDS")
+ saveRDS(birdcount,"SMF/SMF_BirdCount.RDS")
+
+```
+
+```{r Strikes Load}
+# faa <- read_xlsx("DFW/DFW strikes.xlsx")
+# faa <- read_xlsx("ORD/ORD strikes.xlsx")
+ faa <- read_xlsx("SMF/SMF strikes.xlsx")
+
+faa['STRIKE'] <- 1
+
+faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
+
+faa <- faa %>% filter(HEIGHT <= 2000)
+
+faa <- faa %>% 
+  group_by(INCIDENT_DATE, STRIKE) %>% 
+  summarise(STRIKECOUNT = sum(STRIKE))
+
+faa$INCIDENT_DATE <- as.Date(faa$INCIDENT_DATE, '%Y-%m-%d')
+
+faa <-
+  faa %>% dplyr::rename(DATE = INCIDENT_DATE)
+
+sapply(faa,class)
+
+
+### Save the file
+# saveRDS(faa,"DFW/DFW_FAA.RDS")
+# saveRDS(faa,"ORD/ORD_FAA.RDS")
+ saveRDS(faa,"SMF/SMF_FAA.RDS")
+
+
+```
+
+
+```{r Flight Load}
+# Import Krishna's arrivals and departures
+# N.B. The departures and arrivals empty columns are needed as this is faster than pivoting the final table
+ 
+# data_arrivals <- read.csv("DFW/Airline_Arrivals_Group_DFW.csv") %>%
+#   rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
+#   mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+# 
+# data_departures <- read.csv("DFW/Airline_Departures_Group_DFW.csv") %>%
+#   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
+#   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+
+
+# data_arrivals <- read.csv("ORD/Airline_Arrivals_Group_ORD.csv") %>%
+#   rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
+#   mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+# 
+# data_departures <- read.csv("ORD/Airline_Departures_Group_ORD.csv") %>%
+#   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
+#   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+
+data_arrivals <- read.csv("SMF/Airline_Arrivals_Group_SMF.csv") %>%
+  rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
+  mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+data_departures <- read.csv("SMF/Airline_Departures_Group_SMF.csv") %>%
+  rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
+  mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+
+####
+data_flights <- rbind(data_arrivals,data_departures) 
+
+data_flights$DATE <- ymd(data_flights$DATE)
+
+
+data_flights <- data_flights %>% 
+  select(-AD) %>% 
+  dplyr::group_by(DATE) %>% 
+  summarise(TOTAL = sum(ARRIVALS,DEPARTURES))
+rm(data_arrivals, data_departures)
+
+
+
+# # Convert time field to rounded hours for subsequent matching
+# data_flights$`AIRPORT ID` <- "DFW"
+#  data_flights$`AIRPORT ID` <- "ORD"
+ data_flights$`AIRPORT ID` <- "SMF"
+
+sapply(data_flights,class)
+
+# saveRDS(data_flights,"DFW/DFW_Flights.RDS")
+# saveRDS(data_flights,"ORD/ORD_Flights.RDS")
+ saveRDS(data_flights,"SMF/SMF_Flights.RDS")
+ 
+ 
+```
+
+#Master File Creation
+
+```{r Load RDS }
+### Note - assumes these have been cleaned already and and contain a DATE and RTIME field
+
+# data_w <- readRDS("DFW/DFW_Weather.RDS")
+# data_f <- readRDS("DFW/DFW_Flights.RDS")
+# data_b <- readRDS("DFW/DFW_BirdCount.RDS")
+# data_faa <- readRDS("DFW/DFW_FAA.RDS")
+
+
+# data_w <- readRDS("ORD/ORD_Weather.RDS")
+# data_f <- readRDS("ORD/ORD_Flights.RDS")
+# data_b <- readRDS("ORD/ORD_BirdCount.RDS")
+# data_faa <- readRDS("ORD/ORD_FAA.RDS")
+
+data_w <- readRDS("SMF/SMF_Weather.RDS")
+data_f <- readRDS("SMF/SMF_Flights.RDS")
+data_b <- readRDS("SMF/SMF_BirdCount.RDS")
+data_faa <- readRDS("SMF/SMF_FAA.RDS")
+
+```
+
+```{r}
+strikes <- tibble(DATE = seq(ymd("2000-01-01"),ymd("2019-12-31"), by= "days")) 
+
+#update to 1/1/2000
+```
+
+```{r}
+
+# data_b <- data_b %>%
+#   group_by(DATE) %>%
+#   summarise(BIRDCOUNT = sum(BIRDCOUNT))
+
+strikes <-
+  left_join(strikes, data_b , by = c("DATE" = "DATE"))
+
+```
+
+```{r}
+
+# data_f <- data_f %>%
+#   group_by(DATE) %>%
+#   summarise(TOTAL = sum(TOTAL))
+
+strikes <-
+  left_join(strikes, data_f , by = c("DATE" = "DATE"))
+
+
+```
+
+```{r}
+strikes <-
+  left_join(strikes, data_w , by = c("DATE" = "DATE"))
+strikes
+
+
+```
+
+```{r}
+strikes <-
+  left_join(strikes, data_faa, by = c("DATE" = "DATE"))
+```
+
+
+```{r}
+strikes <- cbind(
+  strikes,
+  data.frame(
+    YEAR = as.factor(format(strikes$DATE, format = "%Y")),
+    MONTH = as.factor(format(strikes$DATE, format = "%m")),
+    DAYOFWEEK = as.factor(format(strikes$DATE, format = "%A")),
+    SEASON = as.factor(factor(
+      format(as.yearqtr(
+        as.yearmon(strikes$DATE, "%m/%d/%Y") + 1 / 12
+      ), "%q"),
+      levels = 1:4,
+      labels = c("winter", "spring", "summer", "fall")
+    ))
+  )
+)
+
+strikes$STRIKE[is.na(strikes$STRIKE)] <- 0
+  
+strikes$STRIKECOUNT[is.na(strikes$STRIKECOUNT)] <- 0
+
+strikes$BIRDCOUNT[is.na(strikes$BIRDCOUNT)] <- 0
+
+```
+
+
+```{r}
+# Check for NAs in all columns
+colSums(is.na(strikes))
+```
+
+```{r}
+### Save the file
+#saveRDS(strikes,"DFW/DFW_FINAL.RDS")
+#saveRDS(strikes,"ORD/ORD_FINAL.RDS")
+saveRDS(strikes,"SMF/SMF_FINAL.RDS")
+
+
+```
+
