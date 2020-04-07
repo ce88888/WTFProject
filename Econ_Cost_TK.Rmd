@@ -1,0 +1,66 @@
+---
+title: "Economic Costing"
+author: "Tanu Kajla"
+date: "April 4, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+```
+
+```{r}
+
+#Loading the Flight Data 
+data_flights <- read.csv("Economic_Costing_United/Airline_Arrival_Departure.csv")
+
+#Loading the FAA Data 
+data_faa <- readRDS("KDEN_FAA.RDS")
+
+#Subsetting the Data for after 2017
+data_faa <-data_faa %>% 
+  filter(DATE >= as.Date("2017-01-01"))
+
+```
+
+```{r}
+
+#Filtering the Flight Data to include fields for analysis 
+data_f<- data_flights %>% 
+  select(FL_DATE,OP_UNIQUE_CARRIER,TAIL_NUM, FLIGHTS) %>% 
+  rename(DATE=FL_DATE,
+         CARRIER = OP_UNIQUE_CARRIER,
+         TAIL = TAIL_NUM,
+         TOTAL= FLIGHTS) %>% 
+  mutate(DATE = lubridate::ymd(DATE),
+         MONTH = lubridate::month(DATE, label =TRUE, abbr = FALSE),
+         YEAR = lubridate::year(DATE))
+
+data_f <- data_f %>% 
+  group_by(DATE,CARRIER,TAIL) %>% 
+  summarise(TOTAL= sum(TOTAL)) 
+  #filter(CARRIER == "UA",
+  #       str_detect(TAIL, "N7|N2|N-9"))
+
+data_f <- inner_join(data_f, data_faa, by = "DATE")
+
+#write.csv(data_f,"costing.csv")
+  
+```
+
+```{r}
+#Looks at the total number of Flights by Carrier 
+data_f %>% 
+  group_by(CARRIER) %>% 
+  summarize(TOTAL= sum(TOTAL)) %>% 
+  arrange(-TOTAL) %>% 
+  mutate( RATIO = round(TOTAL/sum(TOTAL)*100,2)) 
+
+```
+
+```{r}
+
+```
+

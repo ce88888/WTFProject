@@ -272,7 +272,6 @@ strikes <-
   left_join(strikes, data_faa, by = c("DATE" = "DATE"))
 ```
 
-
 ```{r}
 strikes <- cbind(
   strikes,
@@ -305,35 +304,39 @@ colSums(is.na(strikes))
 ```
 
 ```{r}
-### Save the file
-
+### Merging all the airfields 
 SMF <- readRDS("SMF/SMF_FINAL.RDS")
 ORD <- readRDS("ORD/ORD_FINAL.RDS")
 DFW <- readRDS("DFW/DFW_FINAL.RDS")
 KDEN <- readRDS("KDEN/KDEN_FINAL.RDS")
 
+#Adding the Airport ID for KDEN
 KDEN$`AIRPORT ID` <- "KDEN"
+
+#Ensuring the order and names of the columns are the same
 KDEN<-KDEN %>% 
   rename(TOTAL = FLIGHTCOUNT) %>% 
   select(DATE,BIRDCOUNT,TOTAL,`AIRPORT ID`,TEMP,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,STRIKE,STRIKECOUNT,YEAR,MONTH,DAYOFWEEK,SEASON)
-
+#Binding the airports (all but KDEN)
 master.data<-data_flights <- rbind(SMF,ORD)
 master.data<-data_flights <- rbind(master.data,DFW)
 
+#Removing Tornedo Funnel Cloud information since it was not relevant for KDEN
 master.data <- 
   master.data %>% 
   select(-TORNADO_FUNNELCLOUD)
 
-master.data<-data_flights <- rbind(master.data,KDEN)
+#Binding KDEN
+master.data <- rbind(master.data,KDEN)
 
+#Ordering the Data set 
 master.data <- 
   master.data %>% 
   select(DATE,`AIRPORT ID`,STRIKE,STRIKECOUNT,BIRDCOUNT,TOTAL,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,YEAR,MONTH,DAYOFWEEK,SEASON)
-
-master.data
-
+#Save the Master Data 
 saveRDS(master.data,"AIRFIELDS_MASTER.RDS")
 
-
+#write to CSV
+#write.csv(master.data,"AIRFIELDS_MASTER.csv")
 ```
 
