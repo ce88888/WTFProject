@@ -1,0 +1,161 @@
+---
+title: "Radar data transformation"
+author: "Christian Endter"
+date: "10/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+#library(lutz)
+#library(bioRad)
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+
+```{r}
+# Read radar data
+birds <- readRDS("VPI FINAL 5.RDS")
+  # k <- readRDS("MMMM.RDS")
+  # l <- readRDS("NNNN.RDS")
+  # birds <- bind_rows(birds,k,l)
+  # saveRDS(birds,"VPI FINAL 6.RDS")
+
+birds$date <- date(birds$datetime)
+
+# Determine Sunrise/Sunset
+#tz_KDEN <- tz_lookup_coords(39.78667,-104.5458, warn=FALSE)
+
+# Note - seemed finicky and required working with UTC and then changing FORMAT to correct timezone, need to then set the radar timezone only after that has been done
+# Note future - need to get tz to work properly - seems issue with Olson name ofr some date/time combinations, works if converting to string first and then back
+#FIX THIS - only do once per day then join back in
+birds$sunrise <- bioRad::sunrise(date=birds$date, lon= -104.5458, lat=39.78667)
+birds$sunset <- bioRad::sunset(date=birds$date, -104.5458, 39.78667)
+attr(birds$sunrise, "tzone") <- "MST"
+attr(birds$sunset, "tzone") <- "MST"
+tz(birds$datetime) <- "MST"
+which(is.na(birds$datetime))
+
+saveRDS(birds, "BIRDS.RDS")
+
+# Label each row as Night or Day, and adjust so it relates to the next day after sunset - note character/date conversion needed as otherwise ends up as numeric column
+
+
+birds <- birds %>% 
+  mutate(nightday = ifelse(datetime < sunrise, "night", ifelse(datetime < sunset, "day", "night"))) %>%
+  arrange(datetime) %>%
+  mutate(nightof = date(ifelse(nightday=="day", as.character(date),
+                               ifelse(nightday=="night" & datetime > sunset, 
+                                      as.character(date+1), as.character(date)))))
+
+# Add a column with the cumulative sum for reflectivity traffic night and day, then order for ease-of-use
+birds <- birds %>% group_by(nightof, nightday) %>% 
+  mutate(crt = cumsum(rtr)) %>%
+  select(date, datetime, nightof, nightday, sunrise, sunset, c(1:18))
+
+# We now have a tibble which has the period identifying information in the first columns, then various reflectivity
+# parameters
+# nightof = which day the night period should be attributed to (includes night after sunse from day before)
+
+# Create tibbles with day and night measures
+birds_day <- filter(birds, nightday=="day")
+birds_night <- filter(birds, nightday=="night")
+
+# Aggregate to day level - Ignores NA, NaN
+birds_day_daily <- birds_day %>% group_by(date) %>% summarise(mvir = mean(vir), mrtr = mean(rtr), crt = last(crt), mff = mean(ff, na.rm=T), mdd=mean(dd, na.rm=T), mu = mean(u, na.rm=T), mv=mean(v, na.rm=T))
+birds_night_daily <- birds_night %>% group_by(date) %>% summarise(mvir = mean(vir), mrtr = mean(rtr), crt = last(crt), mff = mean(ff, na.rm=T), mdd=mean(dd, na.rm=T), mu = mean(u, na.rm=T), mv=mean(v, na.rm=T))
+
+
+## Other way - if just wanting to put one measure's night day next to each other
+# birds_day <- birds_day_temp %>% 
+#   group_by(nightof, nightday) %>% 
+#   summarise(mvir = mean(vir), mrtr = mean(rtr), mff = mean(ff, na.rm=T), mdd = mean(dd, na.rm=T)) %>%
+#   pivot_wider(names_from = nightday, values_from=c(mvir,mrtr,mff,mdd))
+
+mean(birds_day$dd, na.rm=T)
+mean(birds_night$vir)
+
+b <- birds %>% mutate(RTIME = hour(datetime)) %>% select(date, RTIME, vir, rtr, crt, ff, dd) 
+b <- b%>% group_by(date,RTIME) %>% 
+  summarise(mvir=mean(vir), mrtr=mean(rtr), crt = last(crt), mff = mean(ff, na.rm = T), mdd = mean(dd, na.rm=T))
+
+bh <- left_join(y, b, by=c("DATE" = "date", "RTIME" = "RTIME"))
+bhx <- drop_na(bh)
+
+bhx <- bh %>% group_by(DATE, RTIME,STRIKE) %>% summarise_at(c(7:22),mean) %>% select(-BIRDCOUNT)
+
+#saveRDS(bhx, "Combined hour.RDS")
+saveRDS(bh, "Combined hour.RDS")
+
+
+b$RTIME = hour(b$datetime)
+bb <- b %>% group_by(date,RTIME) %>% summarise(mvir=mean(vir, na.rm=T), mrtr=mean(rtr, na.rm=T), md=mean(dd, na.rm=T), mff=mean(ff, na.rm=T))
+x <- left_join(m,bb, by=c("DATE"="date","RTIME"="RTIME"))
+x %>% group_by(STRIKES) %>% summarise(mean(mvir, na.rm=T),mean(mrtr, na.rm=T), median(mrtr, na.rm=T), min(mrtr,na.rm=T), max(mrtr,na.rm=T))
+
+#saveRDS(x,"Hour.RDS")
+x <-readRDS("Hour.RDS")
+x <- na.omit(x)
+
+x$STRIKES <- ifelse(x$STRIKES>=2,2,x$STRIKES)
+x$RISK <- ifelse(x$STRIKES>0,1,0)
+dd <- as.data.frame(x)
+trainyn <- caret::createDataPartition(dd$RISK, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dplyr::select(dfTrain, -c(DATE,RISK,STRIKES,RTIME,ATOTAL,`AIRPORT ID`)) 
+xgTest <- dplyr::select(dfTest, -c(DATE,RISK,STRIKES,RTIME,ATOTAL,`AIRPORT ID`)) 
+
+table(as.factor(dfTrain$RISK))
+
+trainWeights <- ifelse(dfTrain$STRIKE==1,1,0.03463855)
+library(xgboost)
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$RISK, weight = trainWeights)
+
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "binary:logistic",
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+
+caret::confusionMatrix(as.factor(dfTest$RISK),as.factor(ifelse(probpred>0.5,1,0)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+#####
+##y <- filter(x,!is.na(mvir))
+##y %>% group_by(STRIKE) %>% summarise(mean(mrtr, na.rm=T), median(mrtr), min(mrtr), max(mrtr))
+
+x %>% group_by(STRIKES) %>% summarise(mean(mvir, na.rm=T), mean(mrtr, na.rm=T), median(mrtr), min(mrtr), max(mrtr))
+
+```
+

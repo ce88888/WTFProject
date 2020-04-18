@@ -1,0 +1,84 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(padr)
+
+### Note - assumes these have been cleaned already and and contain a DATE and RTIME field
+data_w <- readRDS("KDEN Weather.RDS")
+data_f <- readRDS("KDEN Flights.RDS")
+data_b <- readRDS("KDEN Birdcounts.RDS")
+data_faa <- readRDS("KDEN FAA.RDS")
+
+
+### Removal of extra columns
+### Edit here to retain or remove variables
+data_faa <- data_faa %>%
+  dplyr::select(-c(PRECIPITATION,SKY, TIME, LIGHT))
+
+### Step 1: For those days+RTIMEs with strikes, aggregate to get the count in that day+RT buckket
+data_faa_grouped <- data_faa %>% 
+  dplyr::filter(!is.na(RTIME)) %>% 
+  group_by(DATE,RTIME) %>%
+  summarise(STRIKES = sum(STRIKE))
+
+# N.B.: There are several cells with multiple strikes, uncomment to see
+# table(d$STRIKES)
+# which(d$STRIKES==3)
+
+### Step 2: Join the faa data to the strikes data, which results in table with both the TOTAL flights 
+### and the number of STRIKES where there were any, then calculate a new variable ATOTAL to represent number
+### of flights not hit (need to set NA to 0 to enable correct subtraction)
+###
+### Future: Prepare table with only arriving or departing flights by subsetting on indicator (tbd) in FAA file
+df <- left_join(data_f,data_faa_grouped, by=c("DATE" = "DATE", "RTIME" = "RTIME")) %>%
+  dplyr::select(-c(ARRIVALS, DEPARTURES)) %>%
+  mutate(STRIKES = replace_na(STRIKES,0)) %>% 
+  mutate(ATOTAL = TOTAL-STRIKES)
+
+### Step 3: Create an empty tibble with all possible days and hours in the data set
+empty <- tibble(DATE = seq(ymd("1992-01-01"),ymd("2019-12-31"), by= "days")) %>%
+  pad("hour") %>% 
+  mutate(RTIME = hour(DATE),`AIRPORT ID` = as.factor("KDEN")) %>%
+  dplyr::select(DATE,RTIME, `AIRPORT ID`) %>%
+  mutate(DATE = ymd(substr(as.character(DATE),1,11))) 
+
+### Step 4: Map in the flight and strike
+m <- left_join(empty, df, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME")) %>%
+  dplyr::select(`AIRPORT ID`, `DATE`, `RTIME`,STRIKES,TOTAL,ATOTAL)
+
+rm(empty, df, data_faa_grouped)
+
+### Step 8: Add the weather data
+m <- left_join(m, data_w, by=c("AIRPORT ID" = "AIRPORT ID", "DATE"="DATE","RTIME"="RTIME") )
+
+m <- m %>% select(-ATOTAL)
+rm(data_b,data_f,data_faa,data_w)
+
+### 9 Add bird reflectivity
+b <- readRDS("BIRDS.RDS")
+
+b <- b %>% ungroup() %>% mutate(RTIME = hour(datetime)) %>% select(date, RTIME, nightday, vir, rtr, crt, ff, dd) 
+b <- b%>% group_by(date,RTIME) %>% 
+  summarise(nighday = last(nightday), mvir=mean(vir), mrtr=mean(rtr), crt = last(crt), 
+            mff = mean(ff, na.rm = T), mdd = mean(dd, na.rm=T))
+
+dc <- left_join(m,b, by=c("DATE" ="date", "RTIME" = "RTIME"))
+
+#remove the hours with na strikes (these have no flights)
+#dcc <- filter(dc, !is.na(STRIKES))
+dcd <- filter(dc, !is.na(TOTAL))
+
+saveRDS(dcd,"FAABIRDS hour.RDS")
+
+#filter(dcc, year(DATE)==2013, month(DATE)==6)
+
+```

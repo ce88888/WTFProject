@@ -1,0 +1,190 @@
+---
+title: "Radar Exploration"
+author: "Christian Endter"
+date: "26/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(bioRad)
+library(lutz)
+
+
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+#devtools::install_github("adokter/bioRad")
+```
+
+```{r Vertical Profile Processing and Integration}
+
+
+## set this up as job to run while working on other things
+files_to_process <- list.files(getwd() %+% "/Unprocessed VP files", full.names=TRUE)
+
+start_time <- Sys.time()
+for (i in seq(1, length(files_to_process), by = 100)) {
+  index <- seq(i, min(i+99, length(files_to_process)))
+  vptemp_files <- read_vpfiles(files_to_process[index])
+  vptstemp <- bind_into_vpts(vptemp_files)
+  vpitemp <- integrate_profile(vptstemp)
+  saveRDS(vpitemp, getwd() %+% "/VPI/Batch " %+% index[1] %+% ".RDS")
+  print("Batch " %+% index[1] %+% " to " %+% index[length(index)] %+% " | Time: " %+% round(Sys.time() - start_time,2))
+}
+print(Sys.time()-start_time)
+```
+
+```{r "Read pre ts'd vpts and integrate"}
+
+files_to_process <- list.files(str_c(getwd(),"/VPTS/"), full.names = TRUE)
+for (i in 1:length(files_to_process)) {
+  x<- readRDS(files_to_process[i])
+  y <- integrate_profile(x)
+  saveRDS(y, str_c(getwd(),"/VPI2/Batch ",i,".RDS"))
+}
+
+
+# from VPI RDS files
+files_to_process <- list.files(str_c(getwd(),"/VPI2/"), full.names = TRUE)
+empty <- tibble()
+for (i in 1:length(files_to_process)) {
+  x<- readRDS(files_to_process[i])
+  empty <- bind_rows(empty,as.data.frame(x))
+
+}
+d <- arrange(empty, datetime)
+saveRDS(d,getwd() %+% "/VPI1.RDS")
+
+t <- bind_rows(t,c)
+t <- arrange(t, datetime)
+saveRDS(t, getwd() %+% "/VPI FINAL.RDS")
+
+saveRDS(td,getwd() %+% "/VPI FINAL DAY.RDS")
+
+```
+
+
+```{r}
+# load VPI data into t
+# load KDEN data into d
+
+
+
+td <- t %>% group_by(date = date(datetime)) %>% summarise_all(mean) %>% select(-datetime)
+ggplot(td, aes(x=date, y = vir)) +geom_line()
+
+data <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS")
+d <- data %>% filter(year(DATE) %in% c(2000:2018)) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+d <- d %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
+
+# link in vir, rtr and rt as proxies for birdcount
+dd <- left_join(d,select(td, date, vir, rtr, rt, height),by=c("DATE"="date"))
+
+# now kick out all NA for the time being
+ddn <- remove_missing(dd)
+
+ x <- glm(STRIKE ~ FLIGHTCOUNT + log(rtr)*height + TEMP + DEWP + SLP + VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL + THUNDER + as.factor(WEEK) + as.factor(WEEKDAY), family = binomial,data=ddn)
+summary(x)
+
+y <-ddn %>% group_by(STRIKECOUNT) %>% summarise(mr=mean(RATIO),median(vir),mv=mean(vir), mean(rtr), mean(rt))
+
+#ggplot(ddn, aes(x=STRIKECOUNT,y=vir, group=STRIKECOUNT)) + geom_boxplot()
+library(tibbletime)
+twodmean <- rollify(mean,3)
+ddn$x <- twodmean(ddn$vir)
+
+ggplot(dplyr::filter(ddn,year(DATE)==2015),aes(x=DATE,y=log(vir),colour=STRIKE)) + geom_point() 
+
+x <-ddn %>% group_by(w = week(DATE)) %>% summarise(mv = mean(vir), median(vir),min(vir),max(vir), median(vir), mr=mean(RATIO))
+plot(x$mr,x$mv)
+plot(log(x$mr),log(x$mv))
+summary(lm(mr ~ mv, data=x))
+summary(lm(log(1+mr) ~ log(1+mv), data=x))
+
+plot(ddn$RATIO, ddn$vir)
+plot(ddn$RATIO, log(ddn$vir))
+summary(lm(mr ~ log(1+mv), data=y))
+
+y <- ddn %>% group_by(STRIKECOUNT) %>% summarise(mean(log(1+RATIO)), mean(log(1+vir)))
+y
+ggplot(filter(t,year(datetime)==2013, month(datetime)==6), aes(x=datetime,y=vir)) + geom_line()
+```
+
+
+
+```{r}
+x <-readRDS(getwd() %+% "/RadarRDS/May 2013.RDS")
+x <-readRDS(getwd() %+% "/RadarRDS/Aug 2015.RDS")
+
+x <- x[1:5]
+plot(x)
+hfix <- seq(0,4800,200)
+t <- matrix(rep(hfix,2),nrow=25,ncol=5)
+x$data$height <- t
+
+x$datetime <- ymd_hms(x$datetime, tz=tz_lookup_coords(x$attributes$where$lat,x$attributes$where$lon,warn=FALSE))
+y <- bind_into_vpts(x)
+
+z <-integrate_profile(x)
+
+z <- integrate_profile(y, alt_min = 0,alt_max=5000, interval_max = 100)
+z <- integrate_profile(y[1])
+
+zz <- x[1]
+min(zz$data$HGHT)
+
+hfix <- seq(0,4800,200)
+
+x[["data"]][,"height"] <- 1
+
+
+split_location_data <- function(data) {
+  token <- str_split(data,",")
+  l <- sapply(unlist(token),str_split,":")
+  output <- list(RAD=l[[1]][2],STATE=l[[3]][2],PLC=l[[2]][2])
+  return(output)
+}
+
+vp_to_df <- function(vp, aboveAGL = TRUE){
+  #info <- unlist(split_location_data(vp$attributes$what$source))
+  lat = a$attributes$where$lat
+  lon <- a$attributes$where$lon
+  height <- a$attributes$where$height
+  tz <- tz_lookup_coords(lat, lon, warn=FALSE)
+  datetime <- ymd_hms(vp$datetime, tz=tz)
+  sunrise <- sunrise(datetime,lon, lat, tz=tz)
+  sunset <- sunset(datetime, lon, lat, tz=tz)
+  
+  # Note - this may lead to odd results to other radar stations KFTG = 1675
+  df <- as.data.frame(vp$data[vp$data$HGHT>height-200,])
+  df[,"radar"] <- vp$radar
+  df[,"datetime"] <- datetime
+  #df[,"tz"] <- tz
+  df[,"lat"] <- lat
+  df[,"lon"] <- lon
+  df[,"AGL"] <- height
+  df[,"sunrise"] <- sunrise
+  df[,"sunset"] <- sunset
+  return(df)
+}
+
+
+## Go through list of vp and push them together
+
+
+## Integrate vertically
+
+
+
+z <- vp_to_df(a)
+
+
+z
+a$attributes$what$source
+cbind(a$datetime,a$radar, a$data, a$attributes$where, sunrise(a$datetime))
+```
