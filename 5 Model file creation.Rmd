@@ -36,7 +36,7 @@ data_faa <- readRDS("KDEN FAA.RDS")
 ### Removal of extra columns
 ### Edit here to retain or remove variables
 data_faa <- data_faa %>%
-  dplyr::select(-c(RUNWAY,PRECIP,SKY, TIME, LIGHT))
+  dplyr::select(-c(PRECIPITATION,SKY, TIME, LIGHT))
 
 ```
 
@@ -111,7 +111,7 @@ rm(data_b, data_f, data_faa, data_faa_filtered, data_w, m)
 
 ### VERIFICATION
 # # Check - was 128 total flights, now will be 125 and 3 strikes to be added
-# dplyr::filter(m, DATE=="2008-07-20" & RTIME ==10)
+dplyr::filter(m, DATE=="2008-07-20" & RTIME ==10)
 # # Check - was 45 flights, now 44 non-struck, 1 with strike to be added
 # dplyr::filter(n, DATE=="1998-05-08" & RTIME ==19)
 ```

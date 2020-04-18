@@ -16,7 +16,8 @@ library(lubridate)
 # Import
 ```{r FAA Data Import and Clean-Up}
 # Import the FAA strikes DB file
-data_all <- read.csv("Strikes_Master_v3.csv", na.strings=c("NA",""))
+#data_all <- read.csv("Strikes_Master_v3.csv", na.strings=c("NA",""))
+data_all <- readxl::read_excel("Strikes_02132020.xlsx")
 
 # Remove the underscores as it creates issues with some dplyr summarise functions
 colnames(data_all) <- str_replace_all(colnames(data_all),"_"," ")
@@ -25,7 +26,7 @@ colnames(data_all) <- str_replace_all(colnames(data_all),"_"," ")
 colnames(data_all) <- toupper(colnames(data_all))
 
 # Clean up date and time information
-data_all$`INCIDENT DATE` <- mdy(data_all$`INCIDENT DATE`)
+data_all$`INCIDENT DATE` <- ymd(data_all$`INCIDENT DATE`)
 data_all$`INCIDENT MONTH` <- month(data_all$`INCIDENT DATE`,label=TRUE, abbr=TRUE)
 data_all$`INCIDENT YEAR` <- year(data_all$`INCIDENT DATE`)
   
@@ -37,8 +38,8 @@ data_all$`TIME OF DAY` <- str_replace_all(data_all$`TIME OF DAY`,"Night","NIGHT"
 
 # Phase of Flight field
 data_all <- data_all %>% 
-  mutate(`PHASE OF FLT` = as.factor(replace_na(as.character(`PHASE OF FLT`),"UNKNOWN"))) %>%
-  mutate(`PHASE OF FLT` = recode(`PHASE OF FLT`,"Approach" = "APPROACH", "approach" = "APPROACH",
+  mutate(`PHASE OF FLIGHT` = as.factor(replace_na(as.character(`PHASE OF FLIGHT`),"UNKNOWN"))) %>%
+  mutate(`PHASE OF FLIGHT` = recode(`PHASE OF FLIGHT`,"Approach" = "APPROACH", "approach" = "APPROACH",
                                  "Arrival" = "ARRIVAL", "arrival" = "ARRIVAL",
                                  "Climb" = "CLIMB", "climb" = "CLIMB",
                                  "Departure" = "DEPARTURE", 
@@ -57,13 +58,13 @@ data_all <- data_all %>%
                       "Some Clouds" = "SOME CLOUD")) %>%
   mutate(SKY = fct_relevel(SKY, "UNKNOWN", "NO CLOUD", "SOME CLOUD", "OVERCAST"))
   
-# PRECIP field
+# PRECIPITATION field
 data_all <- data_all %>% 
-  mutate(PRECIP = as.factor(replace_na(as.character(PRECIP), "UNKNOWN"))) %>%
-  mutate(PRECIP = recode(PRECIP, "None" = "NONE","NoNe" = "NONE","Snow" = "SNOW", "Rain" = "RAIN",
+  mutate(PRECIPITATION = as.factor(replace_na(as.character(PRECIPITATION), "UNKNOWN"))) %>%
+  mutate(PRECIPITATION = recode(PRECIPITATION, "None" = "NONE","NoNe" = "NONE","Snow" = "SNOW", "Rain" = "RAIN",
                          "Fog" = "FOG", "Fog, Rain" = "FOG, RAIN", "Fog, Rain, Snow" = "FOG, RAIN, SNOW",
                          "Fog, Snow" = "FOG, SNOW", "Rain, Snow" = "RAIN, SNOW")) %>%
-  mutate(PRECIP = fct_relevel(PRECIP, "UNKNOWN", "NONE", "FOG", "RAIN", "SNOW", "RAIN, SNOW" ))
+  mutate(PRECIPITATION = fct_relevel(PRECIPITATION, "UNKNOWN", "NONE", "FOG", "RAIN", "SNOW", "RAIN, SNOW" ))
 
 # TOD field
 data_all <- data_all %>% 
@@ -135,8 +136,10 @@ makeTD <- function(hour_of_day){
 data <- data_all %>% 
   dplyr::filter(`AIRPORT ID` == "KDEN") %>%
   dplyr::select(DATE = `INCIDENT DATE`,STRIKE, RTIME, LIGHT,
-                `TIME`,`AIRPORT ID`,`SKY`,`PRECIP`,`RUNWAY`) %>% 
-  dplyr::filter(`DATE` < "2018-12-31")
+                `TIME`,`AIRPORT ID`,`SKY`,`PRECIPITATION`,`RUNWAY`,`PHASE OF FLIGHT`) 
+
+#%>% 
+#  dplyr::filter(`DATE` < "2018-12-31")
 
 # clean up factor levels
 data <- data %>% mutate(`AIRPORT ID` = as.factor(as.character(`AIRPORT ID`)))

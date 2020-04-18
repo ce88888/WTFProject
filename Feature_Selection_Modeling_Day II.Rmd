@@ -223,7 +223,7 @@ modelglm.nb$finalModel
 
 modelglm.poisson <- glm(STRIKES~
                         TOTAL+ 
-                        STRIKE+ 
+                        #STRIKE+ 
                         BIRDCOUNT+ 
                         TEMP+ 
                         SLP+ 
@@ -238,6 +238,7 @@ modelglm.poisson <- glm(STRIKES~
                   data=train.data, family=poisson)
 summary(modelglm.poisson)
 #### CE comment: Good news in this smaller model seems to be that the residual deviance is still pretty low compared to the null, but nothing seems to be particularly significant
+#EDIT - SEEMS TO BE BECAUSE STRIKE WAS INCLUDED. A PITY.
 
 predictions<-predict(modelglm.poisson,test.data, type="response" )
 ### CE comment: How can the poisson model get to negative predicted counts ....? this shouldn't be possible by definition as Poisson >=0 .... on googling, seems you left out type=response

@@ -24,6 +24,7 @@ library(ROCR)
 library(performanceEstimation)
 library(rpart)
 library(e1071)
+library(plm) # Hausman test
 # library(ResourceSelection)
 
 
@@ -36,7 +37,7 @@ data <- readRDS("KDEN model data all flights.RDS")
 
 ### Set 1: Base data (adjust time filter as needed)
 ### - every line corresponds to a single flight with STRIKE = 1/0
-d <- data %>% dplyr::filter(year(DATE) %in% 2010:2018) %>%
+d <- data %>% dplyr::filter(year(DATE) %in% 1992:2019) %>%
     mutate(WEEK = as.factor(isoweek(DATE)), 
            MONTH = as.factor(month(DATE)))
   
@@ -80,49 +81,205 @@ table(d$STRIKE)
 ### High zero counts
 # table(d_day_hour$STRIKES)
 # table(d_day$STRIKES)
-
 ```
+
+```{r}
+# simple RF
+d <- dn %>% filter(year(DATE) %in% 2010:2018) #%>% na.omit()
+
+d <- as.data.frame(d)
+d$STRIKE <- as.factor(ifelse(d$STRIKE==0, "NO", "YES"))
+
+
+# Remove AirportId and Date columns
+d <- subset(d, select = -c(`AIRPORT ID`, DATE)) %>% rename(WS = `WIND SPEED`, WA = `WIND ANGLE`, FLTS = `FLTS TOTAL`)
+
+trainyn <- createDataPartition(d$STRIKE, p=0.8, list=FALSE)
+dfTrain <- d[trainyn,]
+dfTest <- d[-trainyn,]
+
+
+rf1 <- randomForest::randomForest(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + DAYOFWEEK + SEASON,
+  data = dfTrain,
+  mtry = 2,
+  importance = TRUE,
+  proximity = TRUE,
+  do.trace = 100
+)
+
+rf1
+
+dfTest$PREDICT <- predict(rf1, dfTest, type="class")
+confusionMatrix(dfTest$PREDICT, dfTest$STRIKE, positive="YES")
+# better on training set despite oob, out of sample/validation also 3.3% FN rate, 14/420
+# balance issue?
+nrow(dfTest[dfTest$STRIKE == "NO",])
+
+# as.factor(STRIKE) ~ 
+#                WS + WA + BIRDCOUNT + FLTS+ 
+#                TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + MONTH
+
+rf2 <- train(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + DAYOFWEEK + SEASON,
+            data=dfTrain, method="gbm",
+            trControl = trainControl(method="cv", number=5, sampling="down"),
+            tuneGrid = expand.grid(interaction.depth = 1:3,
+                                   n.trees = (1:5)*50,
+                                   shrinkage=0.1,
+                                   n.minobsinnode = c(1,10,20)),
+            verbose=FALSE)
+rf2
+varImp(rf2)
+
+dfTest$PREDICT2 <- predict(rf2,dfTest)
+confusionMatrix(dfTest$PREDICT2, dfTest$STRIKE, positive="YES")
+
+### not great
+rf3 <- train(STRIKE ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + DAYOFWEEK + SEASON,
+            data=dfTrain, method="AdaBoost.M1",
+            trControl = trainControl(method="cv", n=5, sampling="down"))
+
+dfTest$PREDICT3 <- predict(rf3,dfTest)
+confusionMatrix(dfTest$PREDICT3, dfTest$STRIKE, positive="YES")
+
+
+glmP <- glm(STRIKECOUNT ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + DAYOFWEEK,
+            data=dfTest, family=poisson)
+summary(glmP)
+
+g <- gam(STRIKECOUNT ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER + MONTH + DAYOFWEEK, 
+         method="REML", data=dfTrain)
+
+summary(g)
+
+par(mfrow = c(2,2))
+gam.check(g)
+
+g <- gam(STRIKECOUNT ~ s(as.integer(week(DATE)), bs = 'cc', k = 53) + s(as.integer(DATE)) +BIRDCOUNT + FLIGHTCOUNT + TEMP + DEWP + SLP +
+                                    VISIB + WDSP + MXSPD + PRCP + FOG + RAIN_DRIZZLE + SNOW_ICE + HAIL +
+                                    THUNDER, method="REML", data=dfTrain)
+summary(g)
+plot(g)
+```
+
+
+```{r}
+d_day2 <- d_day %>% mutate(RATIO = STRIKES/`FLTS TOTAL`) %>% dplyr::filter(year(DATE) %in% 2014:2018)
+d_day3 <- d_day %>% mutate(RATIO = STRIKES/`FLTS TOTAL`) %>% dplyr::filter(year(DATE) %in% 2014:2018, STRIKE==1)
+
+ggplot(d_day2, aes(WEEK,RATIO)) + geom_boxplot() + geom_abline(slope=0,intercept=mean(d_day$RATIO))
+m1 <- mean(d_day2$RATIO, na.rm=T)
+s1 <- sd(d_day2$RATIO, na.rm=T)
+m2 <- mean(d_day3$RATIO, na.rm=T)
+s2 <- sd(d_day3$RATIO, na.rm=T)
+
+
+# 0.0002658522
+# 0.0004855315
+
+lower <- m + s
+upper <- m + 2*s
+
+ggplot(d_day3, aes(RATIO)) + geom_histogram(bins=50) + geom_vline(xintercept=m1, colour="blue") + geom_vline(xintercept=m1+s1, colour="red") 
+library(fitdistrplus)
+
+
+d_day2 <- data %>% mutate(RATIO = STRIKECOUNT/FLIGHTCOUNT) %>% dplyr::filter(year(DATE) %in% 2000:2018)
+x<- d_day2$RATIO
+is
+plotdist(d_day2$RATIO, demp=TRUE)
+data %>% group_by(STRIKE) %>% summarise(n())
+descdist(x[x>0], boot=1000)
+summary(d_day2$RATIO)
+y <- fitdist(x[x>0]/10, "gamma")
+summary(y)
+denscomp(y)
+cdfcomp(y)
+```
+
+
+
+### Logist regression - DAY
 
 ```{r Logistic - Month dummies}
-# Scaling - N(0,1), needed for mixed effects estimation as otherwise seems to have numeric issues
-scales <- build_scales(dfTrain, cols = c("FLTS TOTAL","BIRDCOUNT","TEMP","SLP","WIND ANGLE", "WIND SPEED", "CLOUDH","COVERH","VIS","PRECIP"))
-dfTrainS <- fastScale(dfTrain,scales)
-
-glmL <- glm(STRIKE ~ 
-              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
-              `WIND SPEED` + COVERH + VIS + PRECIP + MONTH + 
-              VIS*`WIND SPEED`,
-                data=dfTrainS, family=binomial, na.action=na.exclude)
-summary(glmL)
-
-ggplot(dfTrain, aes(STRIKES,TEMP)) + geom_point()
-
-
-```
-
-
-```{r Logistic / Mixed Model with Month as random effect (intercept)}
-
-glmLME <- glmer(STRIKE ~ 
-              `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
-              `WIND SPEED` + COVERH + VIS + PRECIP + (1|MONTH) + 
-              VIS*`WIND SPEED`,
-                data=dfTrainS, family=binomial)
-summary(glmLME)
-
-```
-
-
-
-```{r Poisson/NB}
 df <- d_day
 table(df$STRIKES)
 train_indicator <- createDataPartition(df$STRIKES, p = 0.8, list = FALSE)
 dfTrain <- df[train_indicator,]
 dfTest <- df[-train_indicator,]
 
-### Threshold for logistic regression
-log_threshold <- 0.5
+#SLP CLOUDH
+glmL <- glm(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + MONTH,
+                data=dfTrain, family=binomial, na.action=na.exclude)
+summary(glmL)
+
+classify <- function(threshold, data){ ifelse(data > threshold, 1 ,0) }
+
+cglmL <- train(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + MONTH,
+              data=dfTrain, method="glm", family="binomial", na.action=na.exclude)
+summary(cglmL)
+# predict on test data
+dfTest$PREDICT <- predict(glmL,dfTest, type="response")
+dfTest$CLASS <- as.factor(classify(0.4,dfTest$PREDICT))
+
+confusionMatrix(dfTest$CLASS,as.factor(dfTest$STRIKE), positive="1")
+```
+
+
+```{r Logistic / Mixed Model with Month as random effect (intercept)}
+
+# Scaling - N(0,1), needed for mixed effects estimation as otherwise seems to have numeric issues
+scales <- build_scales(dfTrain, cols = c("FLTS TOTAL","BIRDCOUNT","TEMP","SLP","WIND ANGLE", "WIND SPEED", "CLOUDH","COVERH","VIS","PRECIP"))
+dfTrainS <- fastScale(dfTrain,scales)
+glmLME <- glmer(STRIKE ~ 
+              `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+              `WIND SPEED` + COVERH + VIS + PRECIP + (1|MONTH),
+                data=dfTrainS, family=binomial)
+summary(glmLME)
+
+phtest_glmer <- function (glmerMod, glmMod, ...)  {  ## changed function call
+    coef.wi <- coef(glmMod)
+    coef.re <- fixef(glmerMod)  ## changed coef() to fixef() for glmer
+    vcov.wi <- vcov(glmMod)
+    vcov.re <- vcov(glmerMod)
+    names.wi <- names(coef.wi)
+    names.re <- names(coef.re)
+    coef.h <- names.re[names.re %in% names.wi]
+    dbeta <- coef.wi[coef.h] - coef.re[coef.h]
+    df <- length(dbeta)
+    dvcov <- vcov.re[coef.h, coef.h] - vcov.wi[coef.h, coef.h]
+    stat <- abs(t(dbeta) %*% as.matrix(solve(dvcov)) %*% dbeta)  ## added as.matrix()
+    pval <- pchisq(stat, df = df, lower.tail = FALSE)
+    names(stat) <- "chisq"
+    parameter <- df
+    names(parameter) <- "df"
+    alternative <- "one model is inconsistent"
+    res <- list(statistic = stat, p.value = pval, parameter = parameter, 
+        method = "Hausman Test",  alternative = alternative,
+                data.name=deparse(getCall(glmerMod)$data))  ## changed
+    class(res) <- "htest"
+    return(res)
+}
+phtest_glmer(glmLME, glmL)
+```
+
+
+
+```{r Poisson/NB}
+
 
 glmL <- glm(STRIKE ~ 
               `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
@@ -163,18 +320,26 @@ pr <- prediction(p, dfTest$STRIKE)
 prf <- performance(pr,measure="tpr", x.measure="fpr")
 plot(prf)
 performance(pr, measure="auc")
+```
 
+```{r}
 glmNB <- glm.nb(STRIKES ~ 
-                  `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
-                  `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP,
+                  `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
+                  `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP + MONTH,
                 data=dfTrain)
 summary(glmNB)
 
 glmP <- glm(STRIKES ~ 
-                  `FLTS TOTAL` + BIRDCOUNT + TEMP + SLP + `WIND ANGLE` + 
+                  `FLTS TOTAL` + BIRDCOUNT + TEMP + `WIND ANGLE` + 
                   `WIND SPEED` + CLOUDH + COVERH + VIS + PRECIP + MONTH,
             data=dfTrain, family=poisson)
 summary(glmP)
+
+dfTest$PREDICTN <- predict(glmP,dfTest, type="response")
+
+```
+
+
 ```
 ```{r}
 # daily probability
@@ -488,5 +653,88 @@ master <- master %>% mutate(WEEK = week(DATE))
 
 m <- gbm(STRIKE ~ WEEK + TOTAL,data=master)
 
+```
+
+```{r}
+ggplot(d_day, aes(TEMP,VIS, colour=STRIKE)) + geom_point()
+
+d_day <- transform(d_day, group=cut(d_day$TEMP,c(-1000,0,100,200,300,400), include.lowest=TRUE))
+
+d_day %>% group_by(group) %>% summarise(N=n(), S = sum(STRIKES), R=S/N)
+                             
+glmL <- glm(STRIKE ~ group +
+              `FLTS.TOTAL` + BIRDCOUNT + TEMP + `WIND.ANGLE` + 
+              `WIND.SPEED` + COVERH + VIS + PRECIP + MONTH,
+                data=d_day, family=binomial, na.action=na.exclude)
+summary(glmL)
+
+classify <- function(threshold, data){ ifelse(data > threshold, 1 ,0) }
+
+
+
+ggplot(d_day, aes(MONTH, `WIND ANGLE`)) + geom_boxplot()
+
+
+```
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+x <- dfTrain %>% ungroup() %>% 
+  select(-c(DATE, `AIRPORT ID`)) %>% na.omit() %>% 
+  mutate(TARGET = as.factor(STRIKE))
+
+# flaky results
+#dfTrainBalanced <- smote(STRIKE ~ ., data=x, perc.over=2)
+
+# dfTrainBalancedUp <- upSample(x %>% select(-CLASS),x$CLASS)
+# table(dfTrainBalancedUp$Class)
+# table(x$Class)
+
+t <- rpart(STRIKE ~
+              `FLTS TOTAL`+`WIND ANGLE`+ SLP + BIRDCOUNT +
+              `WIND SPEED` + COVERH + VIS + PRECIP, data=dfTrainBalancedUp, control=rpart.control(minsplit=2))
+
+prp(t)
+
+rf <- train(TARGET ~
+              `FLTS TOTAL`+`WIND ANGLE`+ SLP + TEMP + BIRDCOUNT +
+              `WIND SPEED` + COVERH + CLOUDH + VIS + PRECIP + MONTH,
+            data=x, method="gbm",
+            trControl = trainControl(method="cv", number=5, sampling="smote"),
+            tuneGrid = expand.grid(interaction.depth = 1:10,
+                                   n.trees = (1:5)*50,
+                                   shrinkage=0.1,
+                                   n.minobsinnode = c(1,10,20)),
+            verbose=FALSE)
+rf
+varImp(rf)
+
+predict(rf,dfTest)
+
+ada <- train(TARGET ~`FLTS TOTAL`+`WIND ANGLE`+ SLP + TEMP + BIRDCOUNT +
+              `WIND SPEED` + COVERH + CLOUDH + VIS + PRECIP + as.numeric(MONTH),
+            data=x, method="adaboost",
+            trControl = trainControl(method="cv", number=5, savePredictions = "all"))
+
+x <- d_day
+x$RATIO <- x$STRIKES/x$`FLTS TOTAL`
+ggplot(x, aes(y=RATIO, group=month(DATE))) + geom_boxplot()
+
+x <- x %>% ungroup() %>% dplyr::select(-c(`AIRPORT ID`)) 
+x <- x %>% mutate(MONTH = as.numeric(MONTH),WEEK = as.numeric(WEEK), STRIKE = as.numeric(STRIKE))
+x <- x[,-ncol(x)]
+x <- data.frame(scale(x))
+pc <- princomp(as.matrix(na.omit(x)), cor=T)
+plot(pc, type="l")
+summary(pc)
+loadings(pc)
+
+pcv <- prcomp(na.omit(x))
+pcv1 <- data.frame(pcv$x[,1:5])
+plot(pcv1, pch=16, col=rgb(0,0,0,0.5))
+k <- kmeans(pcv1,2,nstart=2)
+plot(pcv1, col=k$clust, pch=16)
 ```
 

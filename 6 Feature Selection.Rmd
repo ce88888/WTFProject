@@ -93,7 +93,7 @@ model.data.day <- model.data %>%
   group_by(`AIRPORT ID`, DATE) %>%
   summarise(
     # We could either take max or first for Flight count
-    FLIGHTCOUNT = max(`TOTAL`),
+    FLIGHTCOUNT = first(`TOTAL`),
     STRIKECOUNT = sum(STRIKE),
     #Sum of Strikes, Will be Converted to Binary Strikes later
     STRIKE = sum(STRIKE),
@@ -109,6 +109,11 @@ model.data.day <- model.data %>%
     VIS = mean(VIS, na.rm = T)
   ) %>%
   mutate(STRIKE = ifelse(STRIKE > 0, 1, 0))
+
+data <- readRDS("KDEN model data all flights.RDS")
+
+
+
 
 #Converting the new day data into a data frame
 model.data.day <- as.data.frame(model.data.day)
@@ -143,7 +148,7 @@ model.data.day <-
 
 # Because of memory constraints considering only 2 years data
 model.data.day <-
-  model.data.day %>% filter(!model.data.day$YEAR %in% c(2013, 2019))
+  model.data.day %>% filter(model.data.day$YEAR %in% 2014:2018) ## CE CHANGED
 
 
 model.data.day <- model.data.day %>%
@@ -285,13 +290,33 @@ fit <- randomForest::randomForest(
   proximity = TRUE,
   do.trace = 100
 )
-print(fit)
+fit2 <- randomForest::randomForest(
+  as.factor(STRIKE) ~ WSPEED + WANGLE + BIRDCOUNT + FLIGHTCOUNT + MONTH + TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + SEASON + DAY,
+  data = model.data.day,
+  mtry = 2,
+  importance = TRUE,
+  proximity = TRUE,
+  do.trace = 100
+)
+fit3 <- randomForest::randomForest(
+  as.factor(STRIKE) ~ WSPEED + WANGLE + BIRDCOUNT  + MONTH + TEMP + COVERH + CLOUDH + VIS + SLP + PRECIP + DAY,
+  data = model.data.day,
+  mtry = 2,
+  importance = TRUE,
+  proximity = TRUE,
+  do.trace = 100
+)
+
+### FIT 2 seems to have only 3.7% classification error for FN incl. COVER? NOTE FLIGHTCOUNT IS WRONG
+print(fit3)
 
 varImp(fit)
-randomForest::varImpPlot(fit, type = 2)
+randomForest::varImpPlot(fit2, type = 2)
 importanceOrder = order(-fit$importance)
 
 varImp(fit)
+
+
 ```
 
 ### Variable Importance using Boruta

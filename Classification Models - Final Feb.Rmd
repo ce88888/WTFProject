@@ -98,8 +98,10 @@ prepareCFMatrixSoftMax <- function(xgbModel, testData, correctLabels, numClasses
   multiProb <- matrix(predictedP, nrow=numClasses, ncol=length(predictedP)/numClasses) %>% 
     t() %>% data.frame() %>%
     mutate(RISK=factor(max.col(., ties.method = "last")-1, levels = c(0,1,2)))
-  return(caret::confusionMatrix(as.factor(correctLabels),multiProb$RISK))
+  return(caret::confusionMatrix(multiProb$RISK, factor(correctLabels, levels= c(0,1,2))))
 }
+
+
 ```
 
 
@@ -192,24 +194,40 @@ xgb.plot.importance(imp[1:20])
 ```
 
 ```{r xgBoost - WEEK}
+### OOS 2019
+### --2-- Risk = percentile of mean strike chance across all weeks (not "week in year")
+###       Attaches a label to each day based on how its week's average ranks across all weeks in percentile terms
+dd <- data %>% filter(year(DATE) %in% c(2019)) %>% dplyr::select(-c(DAYOFWEEK, SEASON, YEAR)) #%>% na.omit() 
+dd <- dd %>% 
+  mutate(WEEK=week(DATE),WEEKDAY= wday(DATE), DAY = yday(DATE), YEAR=year(DATE), MONTH = as.numeric(MONTH)) %>%
+  mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER)) %>%
+  mutate(RATIO=STRIKECOUNT/FLIGHTCOUNT*10000)
 
-table(xWeek$RISK)
+
+x2019 <- dd %>% 
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIOP = mean(RATIO)) %>%
+  mutate(RISK = .bincode(RATIOP, breaks = c(0,min(x$RATIOP) + (1:2)*(max(x$RATIOP)-min(x$RATIOP))/3,max(x$RATIOP)), include.lowest=TRUE)-1) 
+
+# match back to main data (i.e. label each day according to the group which its week belongs to)
+xWeek2019 <- left_join(dd,x2019, by=c("YEAR"="YEAR", "WEEK"="WEEK")) 
+
+table(xWeek2019$RISK)
 
 xgbData <- prepareTrainSplitByLevel(xWeek)
-# newd<- upSample(xgbData$xgbTrain,as.factor(xgbData$Train$RISK))
-# newdR<-as.factor(newd$Class)
-# newd <- newd[,-ncol(newd)]
 xgbMatrix <- xgb.DMatrix(data=as.matrix(xgbData$xgbTrain), label=xgbData$Train$RISK, weight = xgbData$Weights)
 
-#xgbMatrix <- xgb.DMatrix(data=as.matrix(newd),label=newdR)
-
 xgModelWeek <- xgboost(xgbMatrix, 
-                      nfold = 7, showsd = T, stratified = T, print_every_n = 25, nrounds = 400,
+                      nfold = 7, showsd = T, stratified = T, print_every_n = 25, nrounds = 600,
                       max_depth = 50, eta = 0.05, nthread = 4, "gamma" = 0, 
                       objective = "multi:softprob", eval_metric = "merror",
                       num_class = 3, min_child_weight = 1, subsample = 1, colsample_bytree = 1, save_period = NULL)
 
 # Confusion matrix
+prepareCFMatrixSoftMax(xgModelWeek,xgbData$xgbTest,xgbData$Test$RISK) 
+
+xgbData <- prepareTrainSplitByLevel(xWeek2019, pct=0.001)
 prepareCFMatrixSoftMax(xgModelWeek,xgbData$xgbTest,xgbData$Test$RISK)
 
 # Variable importance
@@ -249,6 +267,33 @@ xgb.plot.importance(imp[1:20])
 #                      Class: 0 Class: 1 Class: 2
 # Sensitivity            0.8931   0.5708  0.62281
 # Specificity            0.7542   0.8819  0.96700
+
+
+# RECENT RUN
+Confusion Matrix and Statistics
+
+          Reference
+Prediction   0   1   2
+         0 824  22   2
+         1  34 206   9
+         2   5   7  96
+
+Overall Statistics
+                                         
+               Accuracy : 0.9344         
+                 95% CI : (0.919, 0.9478)
+    No Information Rate : 0.7162         
+    P-Value [Acc > NIR] : <2e-16         
+                                         
+                  Kappa : 0.8536         
+                                         
+ Mcnemar's Test P-Value : 0.2501         
+
+Statistics by Class:
+
+                     Class: 0 Class: 1 Class: 2
+Sensitivity            0.9548   0.8766  0.89720
+Specificity            0.9298   0.9557  0.98907
 
 ```
 
@@ -304,5 +349,69 @@ xgb.plot.importance(imp[1:20])
 # Sensitivity            0.9298   0.7262   0.8610
 # Specificity            0.8800   0.9204   0.9784
 
+```
+
+```{r WEEK regression Logistic}
+
+
+### Need to rigorously test prediction first, then bucketing
+table(xWeek$RISK)
+
+xgbData <- prepareTrainSplitByLevel(xWeek)
+xgbMatrix <- xgb.DMatrix(data=as.matrix(xgbData$xgbTrain), label=xgbData$Train$STRIKE) #, weight = xgbData$Weights)
+
+xgModelWeek <- xgboost(xgbMatrix, 
+                      nfold = 7, showsd = T, stratified = T, print_every_n = 25, nrounds = 400,
+                      max_depth = 50, eta = 0.05, nthread = 4, "gamma" = 0, 
+                      objective = "binary:logistic",
+                      min_child_weight = 1, subsample = 1, colsample_bytree = 1, save_period = NULL)
+
+# Confusion matrix
+#prepareCFMatrixSoftMax(xgModelWeek,xgbData$xgbTest,xgbData$Test$RISK)
+a <- xgbData$xgbTest
+a$PREDICT <- predict(xgModelWeek,as.matrix(a))
+
+
+# binary - just strike DELETE caret::confusionMatrix(as.factor(xgbData$Test$STRIKE), as.factor(as.numeric(a$PREDICT>0.5)))
+
+a$PREDICT <- predict(xgModelWeek,as.matrix(a))
+a$ACTUAL <- (xgbData$Test$STRIKECOUNT/xgbData$Test$FLIGHTCOUNT)*10000
+a$DELTA <- a$ACTUAL-a$PREDICT
+a$RISKP = .bincode(a$PREDICT, breaks = c(0,min(xgbData$Train$RATIOP) + (1:2)*(max(xgbData$Train$RATIOP)-min(xgbData$Train$RATIOP))/3,max(xgbData$Train$RATIOP)), include.lowest=TRUE)-1
+a$RISKA = .bincode(a$ACTUAL, breaks = c(0,min(xgbData$Train$RATIOP) + (1:2)*(max(xgbData$Train$RATIOP)-min(xgbData$Train$RATIOP))/3,max(xgbData$Train$RATIOP)), include.lowest=TRUE)-1
+a$RISKP <- replace_na(a$RISKP,0)
+
+caret::confusionMatrix(as.factor(a$RISKA),as.factor(a$RISKP))
+
+# similar accuracy, but low Kappa - seems to push much into the low risk bucket
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 908  91   7
+#          1  90  44   7
+#          2  23  16   5
+# 
+# Overall Statistics
+#                                           
+#                Accuracy : 0.8035          
+#                  95% CI : (0.7798, 0.8257)
+#     No Information Rate : 0.8573          
+#     P-Value [Acc > NIR] : 1.000000        
+#                                           
+#                   Kappa : 0.2452          
+#                                           
+#  Mcnemar's Test P-Value : 0.007178        
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8893  0.29139 0.263158
+# Specificity            0.4235  0.90673 0.966724
+
+
+# Variable importance
+imp <- xgb.importance(feature_names = colnames(xgbData$xgbTrain), model = xgModelWeek)
+xgb.plot.importance(imp[1:20])
 ```
 

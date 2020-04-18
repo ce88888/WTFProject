@@ -107,7 +107,7 @@ The added complexity with looking at week and month (in 5,6 and 2,3) is that we'
 
 This brings us back to the question of how good the mapping of risk -> HML is for any given day. The rank order is preserved by the cutting/assignment on the scale, but as soon as we assign weekly or monthly values, it is clear that we will be off, by definition, on every day of that week or month (because none of the individual values will be equal to the average, except under very rare circumstances). The models get better when one aggregates - probably because the variability in values on the independent variables for any given risk level is reduced compared to the daily mapping. **But how do we evaluate whether is is more appropriate to aggregate to week or month?** One idea might be that the better mapping should have a less variation around the average ... but I haven't really gotten my head around this yet.
 
-On to the final point. If we do aggregate to, say, month, should we tell the model what the day and week of the year are? In the historical data set there is a fairly direct mapping between day, week, and month, and the variabilty arises because of the start of the year, as mentioned above. If it were the case that week X always falls into Month Y, and all days in Month Y are H, then if you tell me week X I don't need any other variables to tell you that the individual days are H. However, approaches (2) and (3) leave open the possibility that month Y is not always H (analously for weeks), and this also introduces an element of uncertainty in the classification. 
+On to the final point. If we do aggregate to, say, month, should we tell the model what the day and week of the year are? In the historical data set there is a fairly direct mapping between day, week, and month, and the variabilty arises because of the start of the year, as mentioned above. If it were the case that week X always falls into Month Y, and all days in Month Y are H, then if you tell me week X I don't need any other variables to tell you that the individual days are H. However, approaches (2) and (3) leave open the possibility that month Y is not always H (analogously for weeks), and this also introduces an element of uncertainty in the classification. 
 
 I think this is what we are seeing below, where DAY is included as a predictor, but not week or month. There is a strong correlation between the day and HML value, which is constant across a given month (and specific months in the different year will likely have the same HML, but this may not always be so.) Indeed, on a var importance plot, day comes out top. If one includes week as a predictor, the results are very similar ... because day and week or so tightly related.
 
@@ -257,6 +257,13 @@ MODEL AGAINST GAM SMOOTHED RISK LEVEL WITH WEEK AS PREDICTOR
 1. Not clear if valid to include week or if we're deluding ourselves?
 2. Have done this again average ratio for day-in-year, not all days (see points further up of why that may not be good)
 
+----------
+Process - apply smoother to all days in every year -> smoothed P every day
+Bucket or leave as day
+calculate percentile and assign to each day (or by bucket)
+
+Check - difference between smoothed value and actual as small as possible
+
 ```{r}
 # Confusion Matrix and Statistics
 # 
@@ -355,6 +362,165 @@ MODEL AGAINST GAM SMOOTHED RISK LEVEL WITH WEEK AS PREDICTOR
 
 
 ```{r}
+
+# --- DAILY INCL DAY, WEEK, MONTH ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 718  41 164
+#          1 152  36  55
+#          2 252  26 291
+# 
+# Overall Statistics
+#                                              
+#                Accuracy : 0.6023             
+#                  95% CI : (0.5788, 0.6254)   
+#     No Information Rate : 0.6467             
+#     P-Value [Acc > NIR] : 0.9999             
+#                                              
+#                   Kappa : 0.2786             
+#                                              
+#  Mcnemar's Test P-Value : <0.0000000000000002
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6399  0.34951   0.5706
+# Specificity            0.6656  0.87316   0.7731
+
+
+# --- WEEKLY INCL DAY, WEEK, MONTH ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 405 142  37
+#          1 163 301  91
+#          2  49  96 450
+# 
+# Overall Statistics
+#                                              
+#                Accuracy : 0.6667             
+#                  95% CI : (0.6439, 0.6888)   
+#     No Information Rate : 0.3558             
+#     P-Value [Acc > NIR] : <0.0000000000000002
+#                                              
+#                   Kappa : 0.4997             
+#                                              
+#  Mcnemar's Test P-Value : 0.3541             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6564   0.5584   0.7785
+# Specificity            0.8397   0.7874   0.8746
+
+
+# --- MONTHLY INCL DAY, WEEK, MONTH ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 492  90   3
+#          1  97 408  64
+#          2   9  47 524
+# 
+# Overall Statistics
+#                                              
+#                Accuracy : 0.8212             
+#                  95% CI : (0.8024, 0.839)    
+#     No Information Rate : 0.3449             
+#     P-Value [Acc > NIR] : <0.0000000000000002
+#                                              
+#                   Kappa : 0.7318             
+#                                              
+#  Mcnemar's Test P-Value : 0.1183             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8227   0.7486   0.8866
+# Specificity            0.9181   0.8646   0.9510
+
+
+# --- MONTH INCL DAY, WEEK ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 499  83   3
+#          1  98 404  67
+#          2  11  43 526
+# 
+# Overall Statistics
+#                                               
+#                Accuracy : 0.8241              
+#                  95% CI : (0.8054, 0.8418)    
+#     No Information Rate : 0.3506              
+#     P-Value [Acc > NIR] : < 0.0000000000000002
+#                                               
+#                   Kappa : 0.7361              
+#                                               
+#  Mcnemar's Test P-Value : 0.01145             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8207   0.7623   0.8826
+# Specificity            0.9236   0.8630   0.9525
+
+# --- MONTH, INCL DAY ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 497  85   3
+#          1  99 402  68
+#          2  11  42 527
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.8224               
+#                  95% CI : (0.8036, 0.8401)     
+#     No Information Rate : 0.3501               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.7335               
+#                                                
+#  Mcnemar's Test P-Value : 0.008168             
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.8188   0.7599   0.8813
+# Specificity            0.9219   0.8614   0.9533
+
+# --- MONTH EXCL TIME VARIABLES ---
+# Confusion Matrix and Statistics
+# 
+#           Reference
+# Prediction   0   1   2
+#          0 431 124  30
+#          1 176 258 135
+#          2  35  95 450
+# 
+# Overall Statistics
+#                                                
+#                Accuracy : 0.6569               
+#                  95% CI : (0.634, 0.6792)      
+#     No Information Rate : 0.3702               
+#     P-Value [Acc > NIR] : < 0.00000000000000022
+#                                                
+#                   Kappa : 0.4849               
+#                                                
+#  Mcnemar's Test P-Value : 0.0009592            
+# 
+# Statistics by Class:
+# 
+#                      Class: 0 Class: 1 Class: 2
+# Sensitivity            0.6713   0.5409   0.7317
+# Specificity            0.8590   0.7526   0.8838
 
 
 # ignore all of this ... not documented in detail and need to re-run it

@@ -221,7 +221,7 @@ aggregateAndSave <- function(combinedFilesData, airport = "Not Specified"){
   group_by(`AIRPORT ID` = `AIRPORT ID`, DATE = as.Date(TEMPTIME), #values midnight the night before
            RTIME = hour(TEMPTIME)) %>% 
   summarise(`WIND ANGLE` = mean(`WIND ANGLE`, na.rm=TRUE), `WIND SPEED` = mean(`WIND SPEED`, na.rm=TRUE),
-            TEMP = mean(TEMP, na.rm=TRUE),
+            TEMP = mean(TEMP, na.rm=TRUE)/10, #to put it on the normal celcius scale
             SLP = mean(SLP, na.rm=TRUE),
             VIS = mean(`VIS DISTANCE`, na.rm = TRUE),
             CLOUDH = mean(`CLOUD HEIGHT`, na.rm=TRUE),
