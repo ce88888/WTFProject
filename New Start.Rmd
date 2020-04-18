@@ -1,0 +1,793 @@
+---
+title: "Start again"
+author: "Christian Endter"
+date: "11/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+`%!in%` = Negate(`%in%`)
+`%+%` <- function(x,y) str_c(x,y)
+```
+
+Risk level increases with #birds as more chances for a hit
+(1) Show that actual strikes (given #flights) increases with birds
+
+```{r Hourly df of flights, strikes, and birds}
+### Load/construct flight and bird data
+# Hourly weather, flight, and strike data
+data_w <- readRDS("KDEN Weather.RDS")
+data_f <- readRDS("KDEN Flights.RDS")
+data_faa <- readRDS("KDEN FAA.RDS")
+
+#data_faa <- data_faa %>% dplyr::select(-c(PRECIPITATION,SKY, TIME, LIGHT))
+
+### Step 1: For those days+RTIMEs with strikes, aggregate to get the count in that day+RT buckket
+data_faa_grouped <- data_faa %>% 
+  dplyr::filter(!is.na(RTIME)) %>% 
+  group_by(DATE,RTIME) %>%
+  summarise(STRIKES = sum(STRIKE))
+
+### Step 2: Join the faa data to the strikes data, which results in table with both the TOTAL flights 
+### and the number of STRIKES where there were any, then calculate a new variable ATOTAL to represent number
+### of flights not hit (need to set NA to 0 to enable correct subtraction)
+###
+### Future: Prepare table with only arriving or departing flights by subsetting on indicator (tbd) in FAA file
+df <- left_join(data_f,data_faa_grouped, by=c("DATE" = "DATE", "RTIME" = "RTIME")) %>%
+  mutate(STRIKES = replace_na(STRIKES,0)) %>% 
+  mutate(NOSTRIKES = TOTAL-STRIKES)
+
+rm(data_f,data_faa, data_faa_grouped)
+#saveRDS(df,"KDEN flights strikes hourly.RDS")
+
+### Step 3: Load and append bird data
+b <- readRDS("BIRDS.RDS")
+
+# Save sunrise/sunset information separately
+bsun <- b %>% ungroup() %>% group_by(date) %>% summarise(sunrise = first(sunrise), sunset = first(sunset))
+
+# Aggregate radar information to hour
+bhour <- b %>% ungroup() %>% mutate(RTIME=hour(datetime)) %>% 
+  select(date,RTIME, vir,rtr,dd,ff,height) %>%
+  group_by(date, RTIME) %>% summarise_all(mean, na.rm=T)
+
+### Step 4: Combine with flight information
+dfb <- left_join(df,bhour, by=c("DATE" = "date", "RTIME"="RTIME"))
+
+#saveRDS(dfb,"KDEN flights strikes birds hourly.RDS")
+
+
+### half hour 2017 data from A. Dokter
+## issues with file formats/bioRad versions?
+#b17 <- integrate_profile(data)
+#library(bioRad)
+#plot(data)
+```
+
+```{r}
+## We only care about hours with flights and bird information
+
+dfb <- readRDS("KDEN flights strikes birds hourly.RDS")
+dfb <- dfb %>% filter(TOTAL>0 & !is.na(rtr))
+
+## Is there a relationship between - i.e. if birds up, strikes up? Yes - seems increasing vir, rtr, but also windspeed, and average height?
+dfb %>% group_by(STRIKES) %>% summarise(mv = mean(vir),mrtr=mean(rtr),mdd=mean(dd, na.rm=T),mff=mean(ff, na.rm=T),mheight = mean(height, na.rm=T))
+## Noisy data - and spikes/outliers?
+dfb %>% group_by(STRIKES) %>% summarise(mv = mean(vir), median(vir), min(vir), max(vir),mrtr=mean(rtr), median(rtr), min(rtr), max(rtr) )
+dfb %>% mutate(vir = min(vir,5000), rtr=min(rtr,100000)) %>%
+  group_by(STRIKES) %>% summarise(mv = mean(vir), median(vir), min(vir), max(vir),mrtr=mean(rtr), median(rtr), min(rtr), max(rtr) )
+dfb %>% filter(rtr<1000000) %>%
+  group_by(STRIKES) %>% summarise(mv = mean(vir), median(vir), min(vir), max(vir),mrtr=log(mean(rtr)), median(rtr), min(rtr), max(rtr) )
+
+## very loose relationship with widely overlapping ranges? Not much difference between 1 and 2 strikes, but then jumps to 3 strikes and 4 strikes
+ggplot(mutate(dfb,rtr = min(rtr,1000000) ), aes(x=STRIKES,y=rtr, group=STRIKES)) + geom_boxplot()
+
+ggplot(mutate(dfb,rtr = min(rtr,1000000) ), aes(x=(STRIKES),y=log(1+rtr))) + geom_point()
+
+# can't entirely rule out contamination but looks like swarms going through as carries on across one or two hours
+dfb %>% filter(rtr > 90000)
+ggplot(b, aes(x=datetime,y=rtr)) + geom_line()
+
+filter(b, year(datetime)==2016) %>% group_by(month(datetime)) %>% summarise(first(datetime),last(datetime))
+```
+
+
+```{r}
+
+# do periods classified as high really have higher strike numbers or strikes/interval?
+dfb_temp <- dfb #%>% ungroup() %>% mutate(rtr = min(100000,rtr))
+summary(dfb_temp$rtr)
+sd(dfb_temp$rtr)
+dfb_temp$RL <- cut(dfb_temp$rtr, breaks = c(-1,50,10000,200000), labels=c("L","M","H"))
+
+dfb_temp %>% group_by(RL) %>% summarise(mean(rtr),N=n(),F =sum(TOTAL),S=sum(STRIKES),S/F*10000,S/N)
+
+#
+```
+
+(2) So higher strike numbers are associated with higher bird numbers. If we want to predict strikes, can we predict birds?
+
+```{r}
+# merge in weather
+dfw <- left_join(dfb, data_w, by=c("DATE"="DATE","RTIME"="RTIME", "AIRPORT ID"="AIRPORT ID"))
+
+# remove all lines where we don't have bird data
+dfw <- filter(dfw, !is.na(rtr))
+
+
+
+#dfw %>% group_by(RL) %>% summarise_all(mean, na.rm=T)
+# Wind angle and time of year?
+# Temp and time of year 
+
+library(xgboost)
+library(caret)
+
+
+dfw$RL <- as.numeric(cut(dfw$rtr, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+
+dd <- as.data.frame(dfw)
+trainyn <- caret::createDataPartition(dd$RL, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(DAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE,`AIRPORT ID`,ARRIVALS,DEPARTURES,NOSTRIKES, STRIKES, RL,vir,rtr,ff,dd,height))
+xgTest <- dfTest %>% ungroup() %>% mutate(DAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE,`AIRPORT ID`,ARRIVALS,DEPARTURES,NOSTRIKES, STRIKES, RL,vir,rtr,ff,dd,height))
+
+#divided lowest by others to get weights
+table(dfTrain$RL)
+
+trainWeights <- ifelse(dfTrain$RL==0,1,ifelse(dfTrain$RL==1,0.04335,ifelse(dfTrain$RL==2,0.96212,-1)))
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$RL, weight = trainWeights)
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1, subsample = 1, colsample_bytree = 1,
+  save_period = NULL
+)
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=factor(max.col(.,ties.method = "last")-1, levels=c(0,1,2))) # uses max.col to get the column with the highest value
+
+caret::confusionMatrix(xgbMulti$RISK,factor(dfTest$RL, levels=c(0,1,2)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+```
+
+```{r xgboost regression tree}
+##
+# merge in weather
+dfw <- left_join(dfb, data_w, by=c("DATE"="DATE","RTIME"="RTIME", "AIRPORT ID"="AIRPORT ID"))
+
+# remove all lines where we don't have bird data
+dfw <- filter(dfw, !is.na(rtr))
+
+dd <- as.data.frame(dfw)
+trainyn <- caret::createDataPartition(dd$rtr, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(DAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE,`AIRPORT ID`,ARRIVALS,DEPARTURES,NOSTRIKES, STRIKES,vir,rtr,ff,dd,height))
+xgTest <- dfTest %>% ungroup() %>% mutate(DAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE,`AIRPORT ID`,ARRIVALS,DEPARTURES,NOSTRIKES, STRIKES,vir,rtr,ff,dd,height))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$rtr)
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  min_child_weight = 1, subsample = 1, colsample_bytree = 1,
+  save_period = NULL
+)
+dfTest$pred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+dfTest$RL <- as.numeric(cut(dfTest$rtr, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$RLpred <- as.numeric(cut(dfTest$pred, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$diff <- dfTest$pred-dfTest$rtr
+
+
+caret::confusionMatrix(factor(dfTest$RLpred),factor(dfTest$RL))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+```
+
+Forecasting Bird Numbers
+```{r}
+# Get average for day? hour?
+# TODO need to use all data, not only hours where there are flights
+library(lubridate)
+x <- dfb %>% ungroup() %>% select(DATE,RTIME,METRIC=rtr) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+
+# Add weekly and daily averages
+day_averages <- x %>% group_by(DAY) %>% summarise(DMETRIC = mean(METRIC),n())
+week_averages <- x %>% group_by(WEEK) %>% summarise(WMETRIC = mean(METRIC),n())
+
+x <- left_join(x, select(day_averages,DAY,DMETRIC), by = c("DAY"="DAY"))
+x <- left_join(x, select(week_averages,WEEK,WMETRIC), by = c("WEEK"="WEEK"))
+rm(day_averages,week_averages)
+
+# Add weather
+data_w <- readRDS("KDEN Weather.RDS")
+xw <- left_join(x, data_w, by=c("DATE"="DATE","RTIME"="RTIME")) %>% select(-`AIRPORT ID`)
+rm(data_w)
+
+# Try prediction with xgboost
+
+library(xgboost)
+library(caret)
+dd <- as.data.frame(xw)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC))
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$METRIC)
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  min_child_weight = 1, subsample = 1, colsample_bytree = 1,
+  save_period = NULL
+)
+dfTest$pred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+dfTest$RL <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$RLpred <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$diff <- dfTest$pred-dfTest$METRIC
+
+
+caret::confusionMatrix(factor(dfTest$RLpred),factor(dfTest$RL))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+plot(dfTest$diff)
+
+dfTest$diffbucket <- cut(abs(dfTest$diff), 
+                         breaks = c(-1,100,200,300,400,500,1000,2500,5000,1000000), 
+                         labels = c(100,200,300,400,500,1000,2500,5000,1000000), included.lowest=TRUE)
+table(dfTest$diffbucket)
+#pretty bleak picture ... on hourly basis, historically hard to get good forecasts
+
+##better to look at whether the day is risky?
+```
+Check day
+```{r}
+dfb <- readRDS("KDEN flights strikes birds hourly.RDS")
+dfb <- dfb %>% filter(TOTAL>0 & !is.na(vir))
+x <- dfb %>% ungroup() %>% select(DATE,RTIME,METRIC=rtr) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+
+# Add weekly and daily averages
+day_averages <- x %>% group_by(DAY) %>% summarise(DMETRIC = mean(METRIC),n())
+week_averages <- x %>% group_by(WEEK) %>% summarise(WMETRIC = mean(METRIC),n())
+
+x <- x %>% group_by(DATE) %>% summarise(METRIC=mean(METRIC)) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+
+x <- left_join(x, select(day_averages,DAY,DMETRIC), by = c("DAY"="DAY"))
+x <- left_join(x, select(week_averages,WEEK,WMETRIC), by = c("WEEK"="WEEK"))
+rm(day_averages,week_averages)
+
+# Add weather
+data_w <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS") %>% select(-c(BIRDCOUNT,FLIGHTCOUNT,SEASON,YEAR,DAYOFWEEK,MONTH,STRIKE,STRIKECOUNT))
+xw <- left_join(x, data_w, by=c("DATE"="DATE")) 
+rm(data_w)
+
+# Try prediction with xgboost
+
+library(xgboost)
+library(caret)
+dd <- as.data.frame(xw)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$METRIC)
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  min_child_weight = 1, subsample = 1, colsample_bytree = 1,
+  save_period = NULL
+)
+dfTest$pred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+dfTest$RL <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$RLpred <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$diff <- dfTest$pred-dfTest$METRIC
+
+
+caret::confusionMatrix(factor(dfTest$RLpred),factor(dfTest$RL))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+plot(dfTest$diff)
+
+dfTest$diffbucket <- cut(abs(dfTest$diff), 
+                         breaks = c(-1,100,200,300,400,500,1000,2500,5000,1000000), 
+                         labels = c(100,200,300,400,500,1000,2500,5000,1000000), included.lowest=TRUE)
+table(dfTest$diffbucket)
+#pretty bleak picture ... on hourly basis, historically hard to get good forecasts
+
+##better to look at whether the day is risky?
+
+# Do spike days correlate with more bird strikes? Thus, are spike days risky?
+
+
+```
+
+```{r Diff daily rtr above historical average for day}
+# Do strike days correlate with higher average daily figures?
+dfb <- readRDS("KDEN flights strikes birds hourly.RDS")
+dfb <- dfb %>% filter(TOTAL>0 & !is.na(vir))
+x <- dfb %>% ungroup() %>% select(DATE,RTIME,METRIC=rtr) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+
+# Add weekly and daily averages
+day_averages <- x %>% group_by(DAY) %>% summarise(DMETRIC = mean(METRIC),n())
+week_averages <- x %>% group_by(WEEK) %>% summarise(WMETRIC = mean(METRIC),n())
+
+x <- x %>% group_by(DATE) %>% summarise(METRIC=mean(METRIC)) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+
+x <- left_join(x, select(day_averages,DAY,DMETRIC), by = c("DAY"="DAY"))
+x <- left_join(x, select(week_averages,WEEK,WMETRIC), by = c("WEEK"="WEEK"))
+rm(day_averages,week_averages)
+
+
+# Add weather and strikes
+data_w <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS") %>% select(-c(BIRDCOUNT,SEASON,YEAR,DAYOFWEEK,MONTH)) %>%
+  mutate(RATIO = STRIKECOUNT/FLIGHTCOUNT*10000) %>% select(-c(STRIKECOUNT,FLIGHTCOUNT))
+
+xw <- left_join(x, data_w, by=c("DATE"="DATE")) 
+rm(data_w)
+#saveRDS(xw,"KDEN flights strikes birds daily with rtr ave.RDS")
+
+# very weak, hourly relationship more direct
+xd <- xw %>% group_by(DAY) %>% summarise(mean(METRIC), mean(RATIO))
+#cor((xd$`mean(METRIC)`),(xd$`mean(RATIO)`))
+
+# Do days with larger differences from their historic average see higher strikes?
+xd <- xw %>% mutate(DDIFF = METRIC-(DMETRIC),WDIFF=METRIC-WMETRIC)
+
+# Strangely, this really does not seem to be the case in absolute terms, just with respect to the difference from the historic average
+#xd <- xw %>% mutate(DDIFF = METRIC,WDIFF=METRIC-WMETRIC)
+
+mean(abs(xd$DDIFF))
+# check if those with diff > x more likely to see strikes?
+xd %>% group_by(DDIFF > 5500) %>% summarise(mean(RATIO),n())
+
+calc_diff <- function(a, df){
+  d <- df %>% group_by(DDIFF > a) %>% summarise(MR = mean(RATIO),N=n())
+  return(d[2:3])
+}
+
+ratio_by_threshold <- function(df,thresholds = seq(-5000,15000,by=100)) {
+  e<-unlist(sapply(thresholds, calc_diff,df=df))
+  df <- as.data.frame(matrix(e,nrow=length(e)/4,byrow=T))
+  df$thresholds <- thresholds
+  names(df) <- c("RbelowT","RaboveT","N<T","N>T","T")
+  return(df)
+}
+
+difftable <- ratio_by_threshold(xd)
+# yes, days with larger differences from long-term average are more risky
+ggplot(difftable, aes(x=T)) + geom_line(aes(y=RaboveT)) + geom_point(aes(y=RbelowT)) + geom_smooth(aes(y=RaboveT))
+difftable
+
+# For Krishna/Tanu data:
+# xx <- xd %>% select(DATE,DAY,WEEK,DDIFF,METRIC,DMETRIC,WMETRIC,RATIO)
+# saveRDS(xx,"Daily Radar.RDS")
+# mean(xd$RATIO)
+# mean(xd$DMETRIC)
+# data_w <- readRDS("~/WTFProject/Birdstrikes_Models/KDEN_FINAL_NEW.RDS") %>% select(-c(BIRDCOUNT,SEASON,YEAR,DAYOFWEEK,MONTH)) %>%
+#   mutate(RATIO = STRIKECOUNT/FLIGHTCOUNT*10000)
+# mean(data_w$FLIGHTCOUNT)
+
+# So we have 1000 flights per day, average daily chance is 12.6bps, average birdcount = 2800 across all days of the year
+# on days where the count exceeds the specific average for the day, strike incidents increases expondentially with the difference to the historic average
+# Strangly, this does not hold for excess of birds over total average across all days
+```
+Predict diff above hist average
+
+```{r xgboost daily diff above historic average}
+
+
+dd <- as.data.frame(xd)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,WDIFF)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,WDIFF)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$DDIFF)
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  min_child_weight = 1, subsample = 1, colsample_bytree = 1,
+  save_period = NULL
+)
+dfTest$predDiff <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+dfTest$RL <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$RLpred <- as.numeric(cut(dfTest$METRIC, breaks = c(-1,50,10000,200000), labels=c(0,1,2), include.lowest = TRUE))-1
+dfTest$diffdiff <- dfTest$DDIFF-dfTest$predDiff
+
+sum(dfTest$diffdiff > 2000)
+
+
+caret::confusionMatrix(factor(dfTest$RLpred),factor(dfTest$RL))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+plot(dfTest$diffdiff)
+```
+
+Try this as classification
+```{r xgboost diff above historic average daily classifier}
+
+
+xd$RISK <- ifelse(xd$DDIFF>1000,ifelse(xd$DDIFF>6000,2,1),0)
+
+dd <- as.data.frame(xd)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,WDIFF,RISK,RATIO,STRIKE)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,WDIFF,RISK,RATIO,STRIKE)) %>% mutate(FOG = as.numeric(FOG),RAIN_DRIZZLE = as.numeric(RAIN_DRIZZLE),
+         SNOW_ICE = as.numeric(SNOW_ICE), HAIL = as.numeric(HAIL), THUNDER=as.numeric(THUNDER))
+
+tw <- table(dfTrain$RISK)
+trainWeights <- ifelse(dfTrain$RISK==0,tw[3]/tw[1],
+                       ifelse(dfTrain$RISK==1,tw[2]/tw[1],
+                              ifelse(dfTrain$RISK==2,1,-1)))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=dfTrain$RISK, weight = trainWeights)
+
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+## doesn't seem to predict much variation
+caret::confusionMatrix(factor(xgbMulti$RISK, levels=c(0,1,2)), factor(dfTest$RISK, levels = c(0,1,2)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+
+```
+
+does the diff between hourly and daily tell us anything
+```{r Diff rtr hourly above daily historical average}
+x <- dfb %>% ungroup() %>% select(DATE,RTIME,METRIC=rtr) %>% mutate(DAY = lubridate::yday(DATE), WEEK = lubridate::week(DATE))
+k <- readRDS("KDEN flights strikes hourly.RDS") %>% ungroup() %>% mutate(RATIO= STRIKES/TOTAL * 10000) %>% select(DATE,RTIME,RATIO)
+
+x <- left_join(x,k, by=c("DATE"= "DATE", "RTIME" = "RTIME"))
+# Add weekly and daily averages
+day_averages <- x %>% group_by(DAY) %>% summarise(DMETRIC = mean(METRIC),n())
+week_averages <- x %>% group_by(WEEK) %>% summarise(WMETRIC = mean(METRIC),n())
+
+x <- left_join(x, select(day_averages,DAY,DMETRIC), by = c("DAY"="DAY"))
+x <- left_join(x, select(week_averages,WEEK,WMETRIC), by = c("WEEK"="WEEK"))
+rm(day_averages,week_averages)
+
+# Add weather
+data_w <- readRDS("KDEN Weather.RDS")
+xw <- left_join(x, data_w, by=c("DATE"="DATE","RTIME"="RTIME")) %>% select(-`AIRPORT ID`)
+rm(data_w)
+
+xw$DDIFF <- xw$METRIC - xw$DMETRIC
+
+calc_diff <- function(a, df){
+  d <- df %>% group_by(DDIFF > a) %>% summarise(MR = mean(RATIO),N=n())
+  return(d[2:3])
+}
+
+ratio_by_threshold <- function(df,thresholds = seq(-5000,15000,by=1)) {
+  e<-unlist(sapply(thresholds, FUN=calc_diff,df=df))
+  df <- as.data.frame(matrix(e,nrow=length(e)/4,byrow=T))
+  df$thresholds <- thresholds
+  names(df) <- c("RbelowT","RaboveT","N<T","N>T","T")
+  return(df)
+}
+
+# #For Krishna/Tanu
+# xx <- xw %>% select(DATE,RTIME,DAY,WEEK,DDIFF,METRIC,DMETRIC,RATIO,8:17)
+# saveRDS(xx,"Hourly Radar.RDS")
+t
+t <- ratio_by_threshold(xw)
+#evidently also similar - albeit not exponentional relationship to difference above historic daily average
+#plot(t$RaboveT)
+ggplot(t, aes(x=T)) + geom_line(aes(y=RaboveT)) + geom_point(aes(y=RbelowT)) + geom_smooth(aes(y=RaboveT))
+
+
+ggplot(xw, aes(x=(DDIFF),y=(RATIO))) + geom_point()
+
+
+summary(lm(log(1+RaboveT) ~ log(1+T), data=t))
+```
+
+
+Try to forecast that difference
+```{r fcst difference hourly rtr over daily histori average}
+
+xw <-xw %>% mutate(RISK = factor(case_when(DDIFF < 2500 ~ 0,
+                               DDIFF < 5000 ~ 1,
+                               DDIFF < 7500 ~ 2,
+                               DDIFF < 10000 ~ 3,
+                               DDIFF < 12500 ~ 4,
+                               DDIFF < 15000 ~ 5,
+                               DDIFF > 15000 ~ 6), levels=c(0,1,2,3,4,5,6)))
+
+dd <- as.data.frame(xw)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+
+tw <- table(dfTrain$RISK)
+dfTrain <- dfTrain %>% mutate(trainWeights = case_when(RISK == 6 ~ tw[6]/tw[7],
+                                                       RISK == 5 ~ tw[6]/tw[6],
+                              RISK == 4 ~ tw[6]/tw[5],
+                              RISK == 3 ~ tw[6]/tw[4],
+                              RISK == 2 ~ tw[6]/tw[3],
+                              RISK == 1 ~ tw[6]/tw[2],
+                              RISK == 0 ~ tw[6]/tw[1]))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=as.numeric(dfTrain$RISK)-1, weight = dfTrain$trainWeights)
+
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 7,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=7, ncol=length(probpred)/7) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+## doesn't seem to predict much variation
+caret::confusionMatrix(factor(xgbMulti$RISK, levels=c(0,1,2,3,4,5,6)), factor(dfTest$RISK, levels = c(0,1,2,3,4,5,6)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+
+
+```
+
+Can we predict merely elevated birdcount/ risk?
+```{r xgboost hour elevated birdcount}
+
+library(xgboost)
+xw <-xw %>% mutate(RISK = factor(case_when(DDIFF < 2500 ~ 0,
+                               DDIFF < 7500 ~ 1,
+                               DDIFF > 7500 ~ 2), levels=c(0,1,2)))
+
+dd <- as.data.frame(xw)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+
+tw <- table(dfTrain$RISK)
+dfTrain <- dfTrain %>% mutate(trainWeights = case_when(RISK == 2 ~ tw[3]/tw[3],
+                              RISK == 1 ~ tw[3]/tw[2],
+                              RISK == 0 ~ tw[3]/tw[1]))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=as.numeric(dfTrain$RISK)-1, weight = dfTrain$trainWeights)
+
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 3,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=3, ncol=length(probpred)/3) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+## doesn't seem to predict much variation
+caret::confusionMatrix(factor(xgbMulti$RISK, levels=c(0,1,2)), factor(dfTest$RISK, levels = c(0,1,2)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+
+### Looks like acceptable - wrong badly 6/2720 of time and 56/2720, for 1 - over estimating a lot, under by only 20/(156+69), 2 over by ca. half
+```
+Same with high/low risk
+
+```{r}
+xw <-xw %>% mutate(RISK = factor(case_when(DDIFF < 5000 ~ 0,
+                               DDIFF > 5000 ~ 1), levels=c(0,1)))
+
+dd <- as.data.frame(xw)
+trainyn <- caret::createDataPartition(dd$METRIC, p=0.75, list=FALSE)
+dfTrain <- dd[trainyn,]
+dfTest <- dd[-trainyn,]
+rm(trainyn)
+
+xgTrain <- dfTrain %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+xgTest <- dfTest %>% ungroup() %>% mutate(MDAY = day(DATE), MONTH=month(DATE), WDAY = wday(DATE), WEEK = week(DATE)) %>%
+  select(-c(DATE, METRIC,DDIFF,RISK,RATIO)) 
+
+tw <- table(dfTrain$RISK)
+dfTrain <- dfTrain %>% mutate(trainWeights = case_when(RISK == 1 ~ tw[2]/tw[2],
+                              RISK == 0 ~ tw[2]/tw[1]))
+
+xMatrix <- xgb.DMatrix(data=as.matrix(xgTrain), label=as.numeric(dfTrain$RISK)-1, weight = dfTrain$trainWeights)
+
+mXGB <- xgboost(xMatrix,
+  nfold = 7,
+  showsd = T, stratified = T, print_every_n = 10,
+  nrounds = 150,
+  max_depth = 50,
+  eta = 0.05,# step size shrinkage, learning rate
+  nthread = 4,
+  "gamma" = 0,
+  # minimum loss reduction, controls regularisation
+  objective = "multi:softprob",
+  eval_metric = "merror",
+  num_class = 2,
+  min_child_weight = 1,
+  # minimum number of instances required in a child node
+  subsample = 1,
+  # controls number of samples supplied to a tree
+  colsample_bytree = 1,
+  # controls number of features supplied to a tree
+  save_period = NULL
+) # controls number of features supplied to a tree
+
+# Predict the Test set results (probabilities)
+# Note, predict produces vector, need to recast into matrix to see probs for each class, unless using reshape=T, also can use softmax which just gives the classes
+probpred <- predict(mXGB, newdata = as.matrix(xgTest), type="raw") 
+
+xgbMulti <- matrix(probpred, nrow=2, ncol=length(probpred)/2) %>% 
+  t() %>% 
+  data.frame() %>%
+  mutate(RISK=as.factor(max.col(.,ties.method = "last")-1)) # uses max.col to get the column with the highest value
+
+## doesn't seem to predict much variation
+caret::confusionMatrix(factor(xgbMulti$RISK, levels=c(0,1)), factor(dfTest$RISK, levels = c(0,1)))
+imp <- xgb.importance(feature_names = colnames(xgTrain), model = mXGB)
+xgb.plot.importance(imp[1:20])
+
+
+```
+
+```{r}
+b <- readRDS("BIRDS.RDS")
+ggplot(b,aes(x=datetime,y=rtr)) + geom_point()
+
+b %>% filter(year(datetime)==2016) %>% group_by(month(datetime)) %>% summarise(first(datetime),last(datetime))
+```
+
