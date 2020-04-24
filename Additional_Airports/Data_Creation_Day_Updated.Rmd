@@ -133,7 +133,7 @@ sapply(birdcount,class)
 
 #all strikes are till december 2019
 # faa <- read_xlsx("DFW/DFW strikes.xlsx")
- faa <- read_xlsx("ORD/ORD strikes.xlsx")
+# faa <- read_xlsx("ORD/ORD strikes.xlsx")
 # faa <- read_xlsx("SMF/SMF strikes.xlsx")
 # faa <- read_xlsx("KDEN/KDEN strikes.xlsx")
 
@@ -203,12 +203,24 @@ colSums(is.na(faa))
 #   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
 #   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
 
-# data_arrivals <- read.csv("SMF/Airline_Arrivals_Group_SMF.csv") %>%
+data_arrivals <- read.csv("SMF/SMF_Arrivals_Group.csv") %>%
+  rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
+  mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+data_departures <- read.csv("SMF/SMF_Departures_Group.csv") %>%
+  rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
+  mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+
+
+#NEVER TO BE RUN AGAIN 
+# data_arrivals <- read.csv("KDEN/Airline_Arrivals_Group.csv") %>%
 #   rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
 #   mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
-# data_departures <- read.csv("SMF/Airline_Departures_Group_SMF.csv") %>%
+# 
+# data_departures <- read.csv("KDEN/Airline_Departures_Group.csv") %>%
 #   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
 #   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+
+
 
 ####
 data_flights <- rbind(data_arrivals,data_departures) 
@@ -221,12 +233,15 @@ data_flights <- data_flights %>%
   summarise(TOTAL = sum(ARRIVALS,DEPARTURES))
 rm(data_arrivals, data_departures)
 
-# # Convert time field to rounded hours for subsequent matching
-# data_flights$`AIRPORT ID` <- "DFW"
-# data_flights$`AIRPORT ID` <- "ORD"
-# data_flights$`AIRPORT ID` <- "SMF"
 
-sapply(data_flights,class)
+# ##never to be run AGAIN
+# kden <- readRDS("SMF/SMF_FINAL.RDS")
+# kden <-
+#   left_join(kden, data_flights , by = c("DATE" = "DATE"))
+# kden$TOTAL.x <- ifelse(is.na(kden$TOTAL.x), kden$TOTAL.y, kden$TOTAL.x)
+# kden<-kden %>%
+#   rename(TOTAL = TOTAL.x) %>% dplyr::select(-c(TOTAL.y))
+#  saveRDS(kden,"SMF/SMF_FINAL.RDS")
 
 # saveRDS(data_flights,"DFW/DFW_Flights.RDS")
 # saveRDS(data_flights,"ORD/ORD_Flights.RDS")
@@ -237,13 +252,12 @@ sapply(data_flights,class)
 #Master File Creation
 
 ```{r Load RDS }
-### Note - assumes these have been cleaned already and and contain a DATE and RTIME field
+### Note - assumes these have been cleaned already and  contain a DATE and RTIME field
 
 # data_w <- readRDS("DFW/DFW_Weather.RDS")
 # data_f <- readRDS("DFW/DFW_Flights.RDS")
 # data_b <- readRDS("DFW/DFW_BirdCount.RDS")
 # data_faa <- readRDS("DFW/DFW_FAA.RDS")
-
 
 # data_w <- readRDS("ORD/ORD_Weather.RDS")
 # data_f <- readRDS("ORD/ORD_Flights.RDS")
@@ -255,25 +269,24 @@ sapply(data_flights,class)
 # data_b <- readRDS("SMF/SMF_BirdCount.RDS")
 # data_faa <- readRDS("SMF/SMF_FAA.RDS")
 
-data_w <- readRDS("KDEN/KDEN_Weather.RDS")
-data_f <- readRDS("KDEN/KDEN flights.RDS")
-data_b <- readRDS("KDEN/KDEN_BirdCount.RDS")
-data_faa <- readRDS("KDEN/KDEN_FAA.RDS")
+# data_w <- readRDS("KDEN/KDEN_Weather.RDS")
+# data_f <- readRDS("KDEN/KDEN flights.RDS")
+# data_b <- readRDS("KDEN/KDEN_BirdCount.RDS")
+# data_faa <- readRDS("KDEN/KDEN_FAA.RDS")
 
 
 ```
 
 ```{r}
 strikes <- tibble(DATE = seq(ymd("2000-01-01"),ymd("2019-12-31"), by= "days")) 
-#rm(strikes)
+
 ```
 
 ```{r}
 
-#not required for KDEN
-# data_b <- data_b %>%
-#   group_by(DATE) %>%
-#   summarise(BIRDCOUNT = sum(BIRDCOUNT))
+data_b <- data_b %>%
+  group_by(DATE) %>%
+  summarise(BIRDCOUNT = sum(BIRDCOUNT))
 
 strikes <-
   left_join(strikes, data_b , by = c("DATE" = "DATE"))
@@ -281,10 +294,9 @@ strikes <-
 ```
 
 ```{r}
-#not required, already grouped by date 
-# data_f <- data_f %>%
-#   group_by(DATE) %>%
-#   summarise(TOTAL = sum(TOTAL))
+data_f <- data_f %>%
+  group_by(DATE) %>%
+  summarise(TOTAL = sum(TOTAL))
 
 strikes <-
   left_join(strikes, data_f , by = c("DATE" = "DATE"))
@@ -295,8 +307,6 @@ strikes <-
 ```{r}
 strikes <-
   left_join(strikes, data_w , by = c("DATE" = "DATE"))
-strikes
-
 ```
 
 ```{r}
@@ -333,15 +343,56 @@ strikes$BIRDCOUNT[is.na(strikes$BIRDCOUNT)] <- 0
 
 ```{r KDEN Code }
 # Check for NAs in all columns
-colSums(is.na(strikes))
+colSums(is.na(KDEN))
 
-strikes %>% filter(is.na(strikes$RTIME))
+#saveRDS(strikes,"DFW/DFW_FINAL.RDS")
+#saveRDS(strikes,"ORD/ORD_FINAL.RDS")
+#saveRDS(strikes,"SMF/SMF_FINAL.RDS")
+#saveRDS(strikes,"KDEN/KDEN_FINAL.RDS")
+
+```
 
 
+```{r}
 
 ```
 
 ```{r}
+ratio_f<- function(master.data) {
+  
+  master.data <- master.data[complete.cases(master.data), ]
+
+  master.data <- master.data %>%
+  mutate(
+    WEEK = lubridate::week(master.data$DATE),
+    YEAR = lubridate::year(master.data$DATE)
+  ) %>%
+  mutate(RATIO = STRIKECOUNT / TOTAL * 10000)
+t.data <- master.data %>%
+  mutate(RATIO = STRIKECOUNT / TOTAL * 10000) %>%
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIO = mean(RATIO)) %>%
+  mutate(RISK = .bincode(
+    RATIO,
+    breaks = quantile(RATIO, probs = seq(0, 1, 1 / 3)),
+    include.lowest = TRUE
+  ) - 1)
+t.data <- t.data %>%
+  group_by(YEAR, WEEK) %>%
+  summarise(RATIOP = mean(RATIO)) %>%
+  mutate(RISK = .bincode(
+    RATIOP,
+    breaks = c(0, min(RATIOP) + (1:2) * (max(RATIOP) - min(RATIOP)) / 3, max(RATIOP)),
+    include.lowest = TRUE
+  ) - 1)
+master.data <-
+  left_join(master.data, t.data, by = c("YEAR" = "YEAR", "WEEK" = "WEEK"))
+master.data$RISK <-
+  as.factor(ifelse(master.data$RISK == 0, "L", ifelse(master.data$RISK == 1, "M", "H")))
+return(master.data)
+}
+
+
 ### Merging all the airfields 
 SMF <- readRDS("SMF/SMF_FINAL.RDS")
 ORD <- readRDS("ORD/ORD_FINAL.RDS")
@@ -349,40 +400,52 @@ DFW <- readRDS("DFW/DFW_FINAL.RDS")
 KDEN <- readRDS("KDEN/KDEN_FINAL.RDS")
 
 #Adding the Airport ID for KDEN
+SMF$`AIRPORT ID` <- "KSMF"
+ORD$`AIRPORT ID` <- "KORD"
+DFW$`AIRPORT ID` <- "KDFW"
 KDEN$`AIRPORT ID` <- "KDEN"
+
+#Adding the ratios 
+SMF<-ratio_f(SMF)
+ORD<-ratio_f(ORD)
+DFW<-ratio_f(DFW)
+KDEN<-ratio_f(KDEN)
+
+#Binding the airports (all but KDEN)
+master.data<- rbind(SMF,ORD)
+master.data<- rbind(master.data,DFW)
+
+#Removing Tornedo Funnel Cloud information since it was not relevant
+master.data <- 
+  master.data %>% 
+  select(-TORNADO_FUNNELCLOUD,-SNOW_ICE.1)
 
 #Ensuring the order and names of the columns are the same
 KDEN<-KDEN %>% 
-  rename(TOTAL = FLIGHTCOUNT) %>% 
-  select(DATE,BIRDCOUNT,TOTAL,`AIRPORT ID`,TEMP,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,STRIKE,STRIKECOUNT,YEAR,MONTH,DAYOFWEEK,SEASON)
-#Binding the airports (all but KDEN)
-master.data<-data_flights <- rbind(SMF,ORD)
-master.data<-data_flights <- rbind(master.data,DFW)
-
-#Removing Tornedo Funnel Cloud information since it was not relevant for KDEN
-master.data <- 
-  master.data %>% 
-  select(-TORNADO_FUNNELCLOUD)
+  select(DATE, BIRDCOUNT, TOTAL, TEMP, DEWP, SLP, VISIB, WDSP, MXSPD, PRCP, FOG, RAIN_DRIZZLE, SNOW_ICE, HAIL, THUNDER, STRIKE, STRIKECOUNT, YEAR, MONTH, DAYOFWEEK, SEASON, `AIRPORT ID`, WEEK, RATIO, RATIOP, RISK)
 
 #Binding KDEN
 master.data <- rbind(master.data,KDEN)
 
-#Ordering the Data set 
-master.data <- 
-  master.data %>% 
-  select(DATE,`AIRPORT ID`,STRIKE,STRIKECOUNT,BIRDCOUNT,TOTAL,TEMP,DEWP,SLP,VISIB,WDSP,MXSPD,PRCP,FOG,RAIN_DRIZZLE,SNOW_ICE,HAIL,THUNDER,YEAR,MONTH,DAYOFWEEK,SEASON)
-#Save the Master Data 
-saveRDS(master.data,"AIRFIELDS_MASTER.RDS")
+#Code to remove any NAs
+master.data <- master.data[complete.cases(master.data), ]
 
-#write to CSV
-#write.csv(master.data,"AIRFIELDS_MASTER.csv")
+master.data <- master.data %>% rename(FLIGHTCOUNT = TOTAL)
 
+#Code to create Ratios
+
+master.data %>% group_by(`AIRPORT ID`) %>% 
+  summarise(count = sum(STRIKECOUNT))
 ```
 
 
 ```{r}
 
+#Save the Master Data 
+saveRDS(master.data,"AIRFIELDS_MASTERv2.RDS")
 
+#write to CSV
+write.csv(master.data,"AIRFIELDS_MASTER_v2.csv")
 data<-readRDS("AIRFIELDS_MASTER.RDS")
 
 data %>% filter(is.na(data))
