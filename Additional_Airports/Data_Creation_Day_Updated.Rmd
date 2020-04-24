@@ -47,21 +47,18 @@ for(package in packages){
 #weather <- read_csv("DFW/w_DFW.csv") #this doesn't need the precip code 
 #weather <- read_csv("ORD/w_ORD.csv") 
 #weather <- read_csv("SMF/w_SMF.csv") 
+#weather <- read_xls("KDEN/w_DEN.xls") 
 
-weather <- read_xls("KDEN/w_DEN.xls") 
-
-names(weather)
-#View(weather)
 #converts the date column into date (for non KDEN)
-weather<- weather %>% 
+weather<- weather %>%
   dplyr::rename(DATE = YEARMODA)
 
 #convert to Date 
 weather$DATE <- ymd(weather$DATE)
 
 #corrects the precip Column
-# weather <- weather %>%
-#   mutate(PRCP = substr(PRCP, 1, 4))
+ weather <- weather %>%
+   mutate(PRCP = substr(PRCP, 1, 4))
 
 #converts all of the columns to numeric up until precip
 weather[2:11] <- sapply(weather[2:11], as.numeric, 
@@ -75,12 +72,21 @@ sapply(weather,class)
 weather<- weather %>% 
   select(-GUST, -STP)
 
-###### Uncomment to run for the airport required -SAVE
+class.data <- class.data[complete.cases(class.data), ]
+class.data <-
+  class.data[!(class.data$MXSPD == 999.9 |
+                 class.data$PRCP == 99.99), ]
 
-#saveRDS(weather,"DFW/DFW_Weather.RDS")
+#NA Value Check
+colSums(is.na(weather))
+
+#weather %>% filter(is.na(weather$TEMP))
+
+###### Uncomment to run for the airport required -SAVE
+#saveRDS(weather,"DFW/DFW_Weather.RDS") 
 #saveRDS(weather,"ORD/ORD_Weather.RDS")
 #saveRDS(weather,"SMF/SMF_Weather.RDS")
-saveRDS(weather,"KDEN/KDEN_Weather.RDS")
+#saveRDS(weather,"KDEN/KDEN_Weather.RDS")
 
 
 ```
@@ -91,7 +97,7 @@ saveRDS(weather,"KDEN/KDEN_Weather.RDS")
 
 # birdcount <- read_csv("DFW/birdCount_Aggregated_DFW.csv")
 # birdcount <- read_csv("ORD/birdCount_Aggregated_ORD.csv")
- birdcount <- read_csv("SMF/birdCount_Aggregated_SMF.csv")
+# birdcount <- read_csv("SMF/birdCount_Aggregated_SMF.csv")
 
 
 #--- update 3/28 removed all of them from the import -tk
@@ -111,10 +117,15 @@ birdcount$BIRDCOUNT[is.na(birdcount$BIRDCOUNT)] <- 0
 #checking class 
 sapply(birdcount,class)
 
+#NA Value Check
+#colSums(is.na(birdcount))
+#birdcount %>% filter(is.na(weather$TEMP))
+
+
 ###### Uncomment to run for the airport required -SAVE
 # saveRDS(birdcount,"DFW/DFW_BirdCount.RDS")
 # saveRDS(birdcount,"ORD/ORD_BirdCount.RDS")
- saveRDS(birdcount,"SMF/SMF_BirdCount.RDS")
+# saveRDS(birdcount,"SMF/SMF_BirdCount.RDS")
 
 ```
 
@@ -122,29 +133,47 @@ sapply(birdcount,class)
 # faa <- read_xlsx("DFW/DFW strikes.xlsx")
 # faa <- read_xlsx("ORD/ORD strikes.xlsx")
  faa <- read_xlsx("SMF/SMF strikes.xlsx")
+# faa <- read_xlsx("KDEN/KDEN strikes.xlsx")
 
+#Assigns the binary value of 1 to the Strie 
 faa['STRIKE'] <- 1
 
-faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
+#Applies the Height to 0 if it is not there
+#faa$HEIGHT[is.na(faa$HEIGHT)] <- 0 #6338 
 
+#Applies the 2000 Filter of feet to the height (Removes anything above )
 faa <- faa %>% filter(HEIGHT <= 2000)
 
-faa <- faa %>% 
-  group_by(INCIDENT_DATE, STRIKE) %>% 
-  summarise(STRIKECOUNT = sum(STRIKE))
-
+#Converts the data format 
 faa$INCIDENT_DATE <- as.Date(faa$INCIDENT_DATE, '%Y-%m-%d')
 
-faa <-
-  faa %>% dplyr::rename(DATE = INCIDENT_DATE)
 
+#Only maintains the Date and totals the number of strikes by Day
+faa <- faa %>% 
+  group_by(INCIDENT_DATE, STRIKE) %>% 
+  summarise(STRIKECOUNT = sum(STRIKE)) %>% 
+  filter(INCIDENT_DATE >= as.Date("2000-01-01"))
+
+faa <-  faa %>% 
+  dplyr::rename(DATE = INCIDENT_DATE) 
+  
+head(faa)
+tail(faa)
+
+sum(faa$STRIKE)
+sum(faa$STRIKECOUNT)
+
+#checks class
 sapply(faa,class)
 
+#NA Value Check
+colSums(is.na(faa))
+#faa %>% filter(is.na(faa$))
 
 ### Save the file
-# saveRDS(faa,"DFW/DFW_FAA.RDS")
+ saveRDS(faa,"DFW/DFW_FAA.RDS")
 # saveRDS(faa,"ORD/ORD_FAA.RDS")
- saveRDS(faa,"SMF/SMF_FAA.RDS")
+# saveRDS(faa,"SMF/SMF_FAA.RDS")
 
 
 ```
@@ -171,12 +200,12 @@ sapply(faa,class)
 #   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
 #   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
 
-data_arrivals <- read.csv("SMF/Airline_Arrivals_Group_SMF.csv") %>%
-  rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
-  mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
-data_departures <- read.csv("SMF/Airline_Departures_Group_SMF.csv") %>%
-  rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
-  mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
+# data_arrivals <- read.csv("SMF/Airline_Arrivals_Group_SMF.csv") %>%
+#   rename(DATE=FL_DATE,TIME=ARR_TIME_BLK,ARRIVALS=Counts) %>%
+#   mutate(AD = factor("A", levels=c("A","D")), DEPARTURES = 0)
+# data_departures <- read.csv("SMF/Airline_Departures_Group_SMF.csv") %>%
+#   rename(DATE=FL_DATE,TIME=DEP_TIME_BLK,DEPARTURES=Counts) %>%
+#   mutate(AD = factor("D", levels=c("A","D")), ARRIVALS = 0)
 
 ####
 data_flights <- rbind(data_arrivals,data_departures) 
@@ -218,15 +247,15 @@ sapply(data_flights,class)
 # data_b <- readRDS("ORD/ORD_BirdCount.RDS")
 # data_faa <- readRDS("ORD/ORD_FAA.RDS")
 
-# data_w <- readRDS("SMF/SMF_Weather.RDS")
-# data_f <- readRDS("SMF/SMF_Flights.RDS")
-# data_b <- readRDS("SMF/SMF_BirdCount.RDS")
-# data_faa <- readRDS("SMF/SMF_FAA.RDS")
+data_w <- readRDS("SMF/SMF_Weather.RDS")
+data_f <- readRDS("SMF/SMF_Flights.RDS")
+data_b <- readRDS("SMF/SMF_BirdCount.RDS")
+data_faa <- readRDS("SMF/SMF_FAA.RDS")
 
-data_w <- readRDS("KDEN/KDEN_Weather.RDS")
-data_f <- readRDS("KDEN/KDEN flights.RDS")
-data_b <- readRDS("KDEN/KDEN_BirdCount.RDS")
-data_faa <- readRDS("KDEN/KDEN_FAA.RDS")
+# data_w <- readRDS("KDEN/KDEN_Weather.RDS")
+# data_f <- readRDS("KDEN/KDEN flights.RDS")
+# data_b <- readRDS("KDEN/KDEN_BirdCount.RDS")
+# data_faa <- readRDS("KDEN/KDEN_FAA.RDS")
 
 
 ```
@@ -301,6 +330,8 @@ strikes$BIRDCOUNT[is.na(strikes$BIRDCOUNT)] <- 0
 ```{r}
 # Check for NAs in all columns
 colSums(is.na(strikes))
+
+sum(strikes$STRIKECOUNT)
 ```
 
 ```{r}
@@ -338,5 +369,26 @@ saveRDS(master.data,"AIRFIELDS_MASTER.RDS")
 
 #write to CSV
 #write.csv(master.data,"AIRFIELDS_MASTER.csv")
+
 ```
 
+
+```{r}
+
+
+data<-readRDS("AIRFIELDS_MASTER.RDS")
+
+data %>% filter(is.na(data))
+
+
+View(data)
+
+colSums(is.na(data))
+
+View(KDEN_FAA)
+
+View(`KDEN flights`)
+
+
+
+```
