@@ -80,21 +80,21 @@ saveRDS(weather,"KDEN_Weather_New.RDS")
 ```
 
 ```{r}
-# faa <- read_xlsx("Strikes_02132020.xlsx")
-# 
-# faa['STRIKE'] <- 1
-# 
+faa <- read_xlsx("Strikes_02132020.xlsx")
+
+faa['STRIKE'] <- 1
+
 # faa$HEIGHT[is.na(faa$HEIGHT)] <- 0
-# 
-# faa <- faa %>% filter(HEIGHT <= 2000)
-# 
-# faa <- faa %>% group_by(INCIDENT_DATE, STRIKE) %>% summarise(STRIKECOUNT = sum(STRIKE))
-# 
-# faa$DATE <- as.Date(faa$DATE, '%Y-%m-%d')
-# 
-# faa <-
-#   faa %>% dplyr::rename(DATE = INCIDENT_DATE)
-# 
+
+faa <- faa %>% filter(HEIGHT <= 2000)
+
+faa <- faa %>% group_by(INCIDENT_DATE, STRIKE) %>% summarise(STRIKECOUNT = sum(STRIKE))
+
+faa$DATE <- as.Date(faa$DATE, '%Y-%m-%d')
+
+faa <-
+  faa %>% dplyr::rename(DATE = INCIDENT_DATE)
+
 # ### Save the file
 # saveRDS(birdcount,"KDEN_Faa_New.RDS")
 
@@ -176,7 +176,7 @@ strikes$STRIKECOUNT[is.na(strikes$STRIKECOUNT)] <- 0
 
 strikes$BIRDCOUNT[is.na(strikes$BIRDCOUNT)] <- 0
 
-strikes <- strikes %>% select(-c(SNDP, GUST, STP, TORNADO_FUNNELCLOUD))
+strikes <- strikes %>% dplyr::select(-c(SNDP, GUST, STP, TORNADO_FUNNELCLOUD))
 
 strikes <-
   strikes %>% dplyr::rename(FLIGHTCOUNT = TOTAL)

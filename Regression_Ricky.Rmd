@@ -1,0 +1,495 @@
+---
+title: "7 Regression Models"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+  code_folding: hide
+  highlight: pygment
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'dplyr',
+  'leaps',
+  'lubridate',
+  'magrittr',
+  'MASS',
+  'tidyselect',
+  'tidyverse',
+  'zoo',
+  'caret',
+  'Hmisc',
+  'corrplot',
+  "mice",
+  "VIM",
+  'ranger',
+  'laeken',
+  'car',
+  'caret',
+  'magrittr',
+  'mctest',
+  'psych',
+  'ROCR',
+  'varrank',
+  'corrplot',
+  'zoo',
+  'RColorBrewer',
+  'mlbench'
+)
+
+#External Plot for Corr Plot 
+source("http://www.sthda.com/upload/rquery_cormat.r")
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+```
+
+```{r Model Data by Day, warning=FALSE}
+
+# Read Regression dataset from RDS
+reg.data <- readRDS("KDEN_FINAL.RDS")
+
+# Reorder data frame by Date 
+reg.data <- reg.data[order(reg.data$DATE), ]
+
+# write.csv2(reg.data, file = "kden_final.csv", row.names = F)
+
+
+# reg.data <- arrange(reg.data, reg.data$BIRDCOUNT)
+# 
+# reg.data <- reg.data %>%
+#   mutate(BIRDCOUNTBIN = factor(ntile(reg.data$BIRDCOUNT, 3)))
+
+# one-hot-encoding categorical features
+ohe_feats = c('SEASON')
+
+# Create dummies
+
+dummies <- dummyVars(~ SEASON, data = reg.data)
+
+df.dummies <- as.data.frame(predict(dummies, newdata = reg.data))
+
+# Merge Dummies to data frame
+
+reg.data <-
+  cbind(reg.data[, -c(which(colnames(reg.data) %in% ohe_feats))], df.dummies)
+
+
+# # Create lag variables for precip and temp
+# reg.data$PRCP_LAG_1 <- lag(reg.data$PRCP, k = 1)
+# 
+# reg.data$TEMP_LAG_1 <- lag(reg.data$TEMP, k = 1)
+
+# Check for complete cases and filter those out
+reg.data <- reg.data[complete.cases(reg.data), ]
+
+# Remove missing obervations from weather data
+reg.data <-
+  reg.data[!(
+    reg.data$SLP == 9999.9 |
+      reg.data$MXSPD == 999.9 |
+      reg.data$PRCP == 99.99 #| reg.data$PRCP_LAG_1 == 99.99
+  ), ]
+
+# Remove all the strikes with count more than 8
+reg.data <-
+  reg.data %>% filter(reg.data$STRIKECOUNT < 7)
+
+# Separate 2018 and 2019 data out of the original data frame for validating the models
+valid.data <-
+  reg.data[(reg.data$YEAR %in% c(2018, 2019)),]
+
+# Filter out data 
+reg.data <-
+  reg.data %>% filter(!reg.data$YEAR %in% c(1995:2007, 2018, 2019))
+
+reg.data <- subset(reg.data, select = -c(DATE, YEAR, MONTH, DAYOFWEEK))
+
+valid.data <- subset(valid.data, select = -c(DATE, YEAR, MONTH, DAYOFWEEK))
+
+reg.data <- arrange(reg.data, reg.data$BIRDCOUNT)
+
+reg.data <- reg.data %>% filter(BIRDCOUNT < 5000)
+
+reg.data$BIRDCOUNT <-  na_if(reg.data$BIRDCOUNT, 0)
+
+reg.data.imputed <- 
+  kNN(
+    reg.data,
+    variable = c("BIRDCOUNT"),
+    dist_var = c(
+      "FLIGHTCOUNT",
+      "TEMP",
+      "DEWP",
+      "SLP",
+      "VISIB",
+      "WDSP",
+      "MXSPD",
+      "PRCP",
+      "STRIKECOUNT"
+    ),
+    k = 19,
+    # weights = "auto",
+    trace = TRUE,
+    numFun = median,
+    weightDist = TRUE
+  )
+
+reg.data.imputed$BIRDCOUNT <- round(reg.data.imputed$BIRDCOUNT, 0)
+
+# reg.data.imputed$BIRDCOUNT <- round(reg.data.imputed$BIRDCOUNT * 5, 0)
+
+# reg.data.imputed <- reg.data.imputed %>% filter(reg.data.imputed$STRIKECOUNT > 0)
+
+```
+
+```{r Test Train Splits}
+
+# Create the training and test datasets
+set.seed(500)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers <-
+  createDataPartition(reg.data.imputed$STRIKECOUNT, p = 0.70, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- reg.data.imputed[trainRowNumbers, ]
+
+# Step 3: Create the test dataset
+test.data <- reg.data.imputed[-trainRowNumbers, ]
+
+```
+
+```{r Regression Formula}
+
+reg.for <- BIRDCOUNTBIN.2 ~ TEMP + SEASON.winter + SEASON.summer + PRCP + VISIB
+
+reg.formula <- STRIKECOUNT ~   TEMP * DEWP
+  # STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SLP + WDSP  + SEASON.winter + SEASON.summer + SEASON.spring + SEASON.fall 
+```
+
+
+```{r Linear Regression}
+# Linear Regression
+
+model.lm <- lm(reg.formula, train.data)
+summary(model.lm)
+model.lm
+residualPlot(model.lm, type = "rstandard")
+ceresPlots(model.lm)
+```
+
+```{r}
+
+
+
+```
+
+
+
+```{r}
+
+# reg.data <- reg.data %>% filter(reg.data$BIRDCOUNT != 0 | reg.data$STRIKECOUNT != 0)
+
+# reg.data <- reg.data %>%  filter(TEMPBIN == 1)
+
+# write_excel_csv2(reg.data, "kden_eda.xlsx")
+
+
+
+# BIRDCOUNTBIN <- ntile(reg.data$BIRDCOUNT, 3)
+# BIRDCOUNTBIN
+
+# test <- reg.data %>% filter(BIRDCOUNTBIN.2 == 1)
+# 
+# reg.data <- reg.data %>%
+#   mutate(BIRDCOUNTBIN = factor(ntile(reg.data$BIRDCOUNT, 3)))
+# 
+# 
+# plot.data <- reg.data %>% filter(BIRDCOUNT > 0)
+
+
+# apply(reg.data.num, 2, var)
+# 
+# scaled_df <- apply(reg.data.num, 2, scale)
+# head(scaled_df)
+
+# # Calculate eigenvalues & eigenvectors
+# reg.data.cov <- cov(reg.data.num)
+# reg.data.eigen <- eigen(reg.data.cov)
+# str(reg.data.eigen)
+# 
+# phi <- reg.data.eigen$vectors[,1:2]
+# 
+# phi <- -phi
+# 
+# row.names(phi) <-
+#   c(
+#     "BIRDCOUNT",
+#     "FLIGHTCOUNT",
+#     "TEMP",
+#     # "DEWP",
+#     # "SLP",
+#     "VISIB",
+#     "WDSP",
+#     # "MXSPD",
+#     "PRCP"
+#     # "STRIKE"
+#   )
+# colnames(phi) <- c("PC1", "PC2")
+# phi
+# 
+# PC1 <- as.matrix(scaled_df) %*% phi[,1]
+# PC2 <- as.matrix(scaled_df) %*% phi[,2]
+
+```
+
+```{r}
+
+
+reg.data.num <- subset(
+  reg.data.imputed,
+  select =  -c(
+    FOG,
+    RAIN_DRIZZLE,
+    SNOW_ICE,
+    HAIL,
+    THUNDER,
+    SEASON.winter,
+    SEASON.spring,
+    SEASON.summer,
+    SEASON.fall,
+    STRIKECOUNT,
+    DEWP,
+    VISIB,
+    PRCP,
+    WDSP
+  )
+)
+
+
+reg.data.num <- subset(reg.data.num,
+                       select =  -c(BIRDCOUNT_imp))
+
+
+pca_result <- prcomp(reg.data.num[,-6], scale = TRUE)
+names(pca_result)
+
+summary(pca_result)
+
+pca_result$center
+
+pca_result$rotation <- -pca_result$rotation
+pca_result$rotation
+
+pca_result$x <- - pca_result$x
+head(pca_result$x)
+
+
+
+```
+
+
+
+
+
+
+
+```{r fig.height=4, fig.width=4}
+biplot(pca_result, scale = 0)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r fig.height=6, fig.width=6}
+# library(devtools)
+# install_github("vqv/ggbiplot")
+# 
+library(ggbiplot)
+
+ggbiplot(pca_result)
+
+ggbiplot(pca_result, labels=rownames(reg.data.num))
+
+ggbiplot(pca_result,ellipse=TRUE,  labels=rownames(reg.data.num), groups=reg.data.num$STRIKE)
+
+```
+
+
+
+
+```{r}
+reg.pca <- cbind(reg.data.num, pca_result$x[,1:4])
+
+reg.pca
+
+
+ggplot(reg.pca, aes(PC1, PC2, col = STRIKE, fill = STRIKE)) +
+  stat_ellipse(geom = "polygon", col = "black", alpha = 0.1) +
+  geom_point(shape = 21, col = "black")
+
+
+```
+
+```{r}
+
+
+
+# Consider only numeric columns or corelation plots.
+corr.plot.fn <- function(reg.data.imputed) {
+  corr.list <-
+    rquery.cormat(corr.data, type = "flatten", graph = FALSE)
+  cormat <- rquery.cormat(corr.data, graphType = "heatmap")
+  rquery.cormat(corr.data, type = "full")
+  corr.list$r
+}
+
+corr.data <-
+  reg.data.imputed %>% dplyr::select(
+    BIRDCOUNT,
+    FLIGHTCOUNT,
+    TEMP,
+    DEWP,
+    SLP,
+    VISIB,
+    WDSP,
+    MXSPD,
+    PRCP,
+    STRIKECOUNT
+  )
+
+# corr.plot.fn(corr.data)
+
+  corr.list <-
+    rquery.cormat(corr.data, type = "flatten", graph = FALSE)
+  
+  cormat <- rquery.cormat(corr.data, graphType = "heatmap")
+  rquery.cormat(corr.data, type = "full")
+  corr.list$r
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r Imputed Exploration}
+reg.formula <-
+  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON.winter + + SEASON.summer + SEASON.spring + SEASON.fall + SLP + WDSP + BIRDCOUNT 
+reg.data <- arrange(reg.data, reg.data$BIRDCOUNT)
+reg.data <- reg.data %>% filter(BIRDCOUNT < 5000)
+reg.data$BIRDCOUNT <-  na_if(reg.data$BIRDCOUNT, 0)
+reg.data.imputed <- 
+  kNN(
+    reg.data,
+    variable = c("BIRDCOUNT"),
+    dist_var = c(
+      "FLIGHTCOUNT",
+      "TEMP",
+      "DEWP",
+      "SLP",
+      "VISIB",
+      "WDSP",
+      "MXSPD",
+      "PRCP",
+      "STRIKECOUNT"
+    ),
+    k = 19,
+    # weights = "auto",
+    trace = TRUE,
+    numFun = median,
+    weightDist = TRUE
+  )
+reg.data.imputed$BIRDCOUNT <- round(reg.data.imputed$BIRDCOUNT, 0)
+# reg.data.imputed$BIRDCOUNT <- round(reg.data.imputed$BIRDCOUNT * 5, 0)
+reg.data.imputed <- reg.data.imputed %>% filter(reg.data.imputed$STRIKECOUNT > 0)
+summary(reg.data.imputed)
+# Linear Regression
+model.lm <- lm(reg.formula, reg.data.imputed)
+summary(model.lm)
+model.lm
+#Residual Plot
+residualPlot(model.lm, type = 'rstandard')
+#ceresPlots(model.lm)
+#ggplot(reg.data, aes(x = `TEMP`)) +
+#geom_bar() +
+#theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#Defining my chart attributes
+mychartattributes <-
+  theme_bw() + theme(text = element_text(family = "serif")) + theme(
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "gray"),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+#plot.data <- reg.data.im %>% filter(BIRDCOUNTBIN.3==1)
+p1 <- ggplot(reg.data.imputed,
+             aes(x = (BIRDCOUNT), y = STRIKECOUNT)) + geom_point(
+               color = "#00AFBB",
+               fill = "#00AFBB",
+               size = 1.5,
+               shape = 1
+             ) + labs(
+               title = "Relationship between Imputed Birdcount & Strikecount",
+               subtitle = "Imputed Birdcount & Strikecount do not have a linear relationship",
+               caption = "Team WTF | MSBA 2020",
+               x = "Birdcount",
+               y = "Strikecount"
+             ) + mychartattributes + geom_smooth(
+               method = "lm",
+               se = FALSE,
+               fullrange = FALSE,
+               level = 0.95,
+               color = "black"
+             )
+p1  + xlim(0,4500) + ylim(0, 10)
+```

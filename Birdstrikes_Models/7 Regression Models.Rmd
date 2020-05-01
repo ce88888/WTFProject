@@ -38,7 +38,7 @@ packages <- c(
   'MLeval',
   'pastecs',
   'PerformanceAnalytics',
-  'pROC',
+  # 'pROC',
   'proxy',
   'pscl',
   'psych',
@@ -54,11 +54,11 @@ packages <- c(
   'zoo',
   'corrplot',
   'glmnet',
-  'doParallel',
-  'foreach',
+  # 'doParallel',
+  # 'foreach',
   'broom',
   'DT',
-  'h2o',
+  # 'h2o',
   'AppliedPredictiveModeling'
 )
 
@@ -72,11 +72,11 @@ for(package in packages){
   library(package, character.only = TRUE)
 }
 
-# Initiate Parallel
-registerDoParallel(cores = 4)
-
-# Initiate h2o automl
-h2o.init()
+# # Initiate Parallel
+# registerDoParallel(cores = 4)
+# 
+# # Initiate h2o automl
+# h2o.init()
 
 ```
 
@@ -104,7 +104,7 @@ reg.data <-
   ), ]
 
 reg.data <-
-  reg.data %>% filter(reg.data$STRIKECOUNT < 8)
+  reg.data %>% filter(reg.data$STRIKECOUNT <= 7)
 
 valid.data <-
   reg.data[(reg.data$YEAR %in% c(2018, 2019)),]
@@ -137,7 +137,7 @@ test.data <- reg.data[-trainRowNumbers, ]
 
 ```{r Regression Formula}
 reg.formula <-
-  STRIKECOUNT ~  FLIGHTCOUNT + TEMP + PRCP  + VISIB + SEASON + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
+  STRIKECOUNT ~  FLIGHTCOUNT + TEMP * DEWP + PRCP  + VISIB + SEASON + SLP + WDSP + PRCP_LAG_1 + TEMP_LAG_1 + BIRDCOUNT
 
 ```
 
@@ -159,10 +159,10 @@ model.metrics <-
 
 ```{r Functions}
 
-pred.check<- function (check.valid.data,model.name) {
-  pred.fail<- check.valid.data %>%  
-    select(STRIKECOUNT,
-           round.model.predictions.,model.predictions) %>% 
+pred.check <- function (check.valid.data, model.name) {
+  pred.fail <- check.valid.data %>%
+    dplyr::select(STRIKECOUNT,
+                  round.model.predictions., model.predictions) %>%
     mutate("check" = round.model.predictions. == STRIKECOUNT,
            model.name = model.name)
   return(pred.fail)
@@ -294,6 +294,8 @@ validate.models <- function(model, model.predictions, data, model.name) {
 model.name <- "Linear Regression"
 rm(check.data, check.test.data, check.valid.data)
 
+# model.lm <- lm(reg.formula,train.data)
+
 model.lm <- train(
   reg.formula,
   data = train.data,
@@ -308,6 +310,8 @@ model.lm <- train(
 )
 
 summary(model.lm)
+model.lm
+
 
 # predict on test data
 model.predictions <- predict(model.lm, test.data, type = "raw")
@@ -330,6 +334,10 @@ check.valid.data <-
 
 pred.glm<-pred.check(check.valid.data,model.name)
 pred.glm
+test <- pred.glm %>% filter(check == TRUE & STRIKECOUNT != 0)
+test
+
+# 114  were accurate
 
 ```
 

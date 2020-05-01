@@ -1,0 +1,625 @@
+---
+title: "BirdStrikes_Multinomial_Classification"
+author: "Team Strikes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: pygment
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#CLEAR WORKSPACE
+# rm(list = ls(all = TRUE))
+# gc(reset=TRUE)
+```
+
+
+```{r Check installed packages, echo = FALSE, warning=FALSE, message=FALSE}
+# Creating a vector of packages used within
+packages <- c(
+  'Boruta',
+  'car',
+  'caret',
+  'dplyr',
+  'e1071',
+  'Information',
+  'lubridate',
+  'magrittr',
+  'MASS',
+  'mctest',
+  'mlbench',
+  'MLeval',
+  'PerformanceAnalytics',
+  'pROC',
+  'proxy',
+  'pscl',
+  'psych',
+  'ranger',
+  'ROCR',
+  'tidyselect',
+  'tidyverse',
+  'VIM',
+  'zoo',
+  'glmnet',
+  'doParallel',
+  'foreach',
+  'DMwR2',
+  'ROSE',
+  'AppliedPredictiveModeling',
+  'xgboost',
+  'InformationValue',
+  'caretEnsemble',
+  'MLmetrics',
+  'nnet',
+  'Metrics',
+  'grid',
+  'gridExtra'
+  # 'compiler'
+)
+
+# Checking for package installations on the system and installing if not found
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+# Including the packages for use
+for(package in packages){
+  library(package, character.only = TRUE)
+}
+
+```
+
+
+```{r}
+# airportName <- "KSMF"
+```
+
+
+```{r}
+# Read Classification dataset from RDS
+class.data <- readRDS("AIRFIELDS_MASTERv2.RDS")
+
+# class.data <- class.data %>% rename(AIRFIELD = `AIRPORT ID`)
+
+# class.data <- class.data %>% filter(class.data$AIRFIELD == airportName)
+```
+
+```{r Model Data by Day}
+
+# Reorder data frame by Date 
+class.data <- class.data[order(class.data$DATE), ]
+
+class.data <-
+  class.data %>% filter(class.data$STRIKECOUNT < 10)
+
+class.data <- class.data[complete.cases(class.data), ]
+
+class.data <-
+  class.data[!(class.data$MXSPD == 999.9 |
+                 class.data$PRCP == 99.99), ] #| class.data$PRCP_LAG_1 == 99.99
+
+class.data$FOG <- as.factor(class.data$FOG)
+class.data$SNOW_ICE <- as.factor(class.data$SNOW_ICE)
+
+class.data <- class.data %>% filter(!(class.data$BIRDCOUNT == 0 & class.data$STRIKECOUNT == 0))
+
+```
+
+```{r Test Train Splits}
+
+# one-hot-encoding categorical features
+ohe_feats = c('SEASON')
+
+# Create dummies
+dummies <- dummyVars(~ SEASON, data = class.data)
+
+df.dummies <- as.data.frame(predict(dummies, newdata = class.data))
+
+# Merge Dummies to data frame
+class.data <-
+  cbind(class.data[, -c(which(colnames(class.data) %in% ohe_feats))], df.dummies)
+
+class.data <-
+  class.data %>% filter(!class.data$YEAR %in% c(1995:1999))
+
+class.data <-
+  subset(
+    class.data,
+    select = -c(
+      DATE,
+      YEAR,
+      # SNOW_ICE,
+      STRIKECOUNT,
+      STRIKE,
+      WEEK,
+      RATIO,
+      RATIOP,
+      # WDSP,
+      # DEWP,
+      MONTH,
+      # THUNDER,
+      # HAIL,
+      DAYOFWEEK,
+      `AIRPORT ID`
+    )
+  )
+
+
+```
+
+```{r}
+# Create the training and test datasets
+set.seed(100)
+
+class.data$RISK <- as.factor(class.data$RISK)
+
+# Step 1: Get row numbers for the training data
+trainRowNumbers.cl <-
+  createDataPartition(class.data$RISK, p = 0.70, list = FALSE)
+
+# Step 2: Create the training  dataset
+train.data <- class.data[trainRowNumbers.cl, ]
+
+# Step 3: Create the test dataset
+test.data <- class.data[-trainRowNumbers.cl, ]
+```
+
+```{r}
+
+model.metrics <-
+  data.frame(
+    "Overall Stat" = character(0),
+    "ModelName" = character(0),
+    stringsAsFactors = FALSE
+  )
+
+```
+
+
+
+```{r Validate Functions}
+
+validateAndPrintResult <- function(model, data, modelName = "test") {
+  # Predict on testData
+  predicted.resp <- predict(model, data)
+  head(predicted.resp)
+  
+  predictions <- as.numeric(predict(model, data, type = 'raw'))
+  # multiclass.roc(data$RISK, predictions)
+  
+  cm <-   caret::confusionMatrix(
+    reference = as.factor(test.data$RISK),
+    data = predicted.resp,
+    mode = 'everything',
+    positive = 'YES'
+  )
+  
+  # Record Class - Sensitivity, specificity etc
+  cm_class <- as.data.frame(cm$byClass)
+  
+  cm_class <-
+    cm_class %>% dplyr::select(Sensitivity, Specificity, Precision, Recall, F1)
+  
+  cm_class <- round(cm_class, 2)
+  
+  cm_class <- as.data.frame(t(cm_class))
+  
+  cm_class <-
+    cm_class %>% dplyr::select(`Class: H`, `Class: M`, `Class: L`)
+  
+  # extract the confusion matrix values as data.frame
+  cm_d <- as.data.frame(cm$table)
+  
+  cm_d <- cm_d %>% rename("Actuals" = Reference)
+  # confusion matrix statistics as data.frame
+  cm_st <- data.frame(cm$overall)
+  
+  cm_st <- cm_st %>% rename("OverallStats" = cm.overall)
+  
+  # round the values
+  cm_st$OverallStats <- round(cm_st$OverallStats, 2)
+  
+  # here we also have the rounded percentage values
+  cm_p <- as.data.frame(prop.table(cm$table))
+  cm_d$Perc <- round(cm_p$Freq * 100, 2)
+  
+  # plotting the matrix
+  cm_d_p <-
+    ggplot(data = cm_d, aes(y = Prediction , x =  Actuals, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = paste("", Freq)), color = 'white', size = 4) +
+    theme_light() +
+    guides(fill = FALSE)
+  
+  cm_d_perc <-
+    ggplot(data = cm_d, aes(y = Prediction , x =  Actuals, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = paste("", Perc, "%")), color = 'white', size = 4) +
+    theme_light() +
+    guides(fill = FALSE)
+  
+  # plotting the stats
+  cm_st_p <-  tableGrob(head(cm_st, 2))
+  
+  cm_st_p1 <- tableGrob(cm_class)
+  
+  # all together
+  grid.arrange(
+    cm_d_p,
+    cm_st_p,
+    cm_d_perc,
+    cm_st_p1,
+    nrow = 2,
+    ncol = 2,
+    top = textGrob(
+      paste0("Confusion Matrix and Statistics ", modelName),
+      gp = gpar(fontsize = 14, font = 2)
+    ),
+    heights = c(4, 4),
+    widths = c(4, 4)
+  )
+  
+  cm_st$ModelName <- NA
+  cm_st[is.na(cm_st)] <- modelName
+  model.metrics <- rbind(model.metrics, head(cm_st, 2))
+  
+}
+
+```
+
+```{r Baruta, r fig1, fig.height = 2, fig.width = 4, fig.align = "center"}
+
+# Execute Boruta
+var.boruta <-
+  Boruta(
+    as.factor(RISK) ~ .,
+    data = class.data,
+    doTrace = 2
+  )
+
+# Plot importance based on the Z Scores
+lz <- lapply(1:ncol(var.boruta$ImpHistory), function(i)
+  var.boruta$ImpHistory[is.finite(var.boruta$ImpHistory[, i]), i])
+names(lz) <- colnames(var.boruta$ImpHistory)
+Labels <- sort(sapply(lz, median))
+plot(
+  var.boruta,
+  side = 1,
+  las = 2,
+  labels = names(Labels),
+  at = 1:ncol(var.boruta$ImpHistory),
+  cex.axis = 0.7
+)
+final.boruta <- TentativeRoughFix(var.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+boruta.df <- attStats(final.boruta)
+print(boruta.df)
+
+```
+
+* Down-sampling: randomly remove instances in the majority class
+
+* Up-sampling: randomly replicate instances in the minority class
+
+* Synthetic minority sampling technique (SMOTE): down samples the majority class and synthesizes new minority instances by interpolating between existing ones
+
+```{r Modeling with upsampling, echo=FALSE, message=FALSE, warning=FALSE}
+
+trControl <- trainControl(
+  method = "cv",
+  number = 7,
+  savePredictions = "final",
+  index = createFolds(as.factor(train.data$RISK), 7),
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary,
+  sampling = "up"
+)
+
+# multinom.grid <- expand.grid(decay = 0)
+
+xgbTreeGrid <-
+  expand.grid(
+    nrounds = 1000,
+    max_depth = seq(0, 1, by = 0.1),
+    eta = 0.1,
+    gamma = 0,
+    colsample_bytree = 0.6537,
+    subsample = 1.0,
+    min_child_weight = 4
+  )
+
+
+glmnetGridElastic <-
+expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
+
+
+gbm.tune.grid <-
+  expand.grid(
+    n.trees = c(401),
+    interaction.depth = c(0, 0.1, 0.2),
+    shrinkage = c(.01, .1, .3),
+    n.minobsinnode = c(5, 10, 15)
+  )
+
+
+set.seed(333)
+
+modelListUp <- caretList(
+  RISK ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + PRCP + SEASON.winter + SEASON.spring + SEASON.summer,
+  
+  train.data,
+  
+  trControl = trControl,
+  
+  metric = "ROC",
+  
+  verbose = FALSE,
+  
+  tuneList = list(
+    
+    # Multinomial Logistic regression is using multinom method from nnet package
+    # multinom = caretModelSpec(method = 'multinom',
+    #                           maxit = 150,
+    #                           tuneGrid = multinom.grid),
+    
+    ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+
+    xgbTree = caretModelSpec(
+      method = "xgbTree",
+      tuneGrid = xgbTreeGrid,
+      nthread = 8
+    ),
+
+    glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),
+    # Elastic, highly correlated with lasso and ridge regressions
+
+    rf = caretModelSpec(
+      method = "rf",
+      ntree = 5000,
+      tuneLength = 20
+    ),
+    # rf
+
+    gbm = caretModelSpec(method = "gbm")#, tuneGrid = gbm.tune.grid)
+    
+  )
+)
+
+
+
+```
+
+
+```{r Modeling with downsampling, echo=FALSE, warning=FALSE, message=FALSE}
+
+trControl <- trainControl(
+  method = "cv",
+  number = 7,
+  savePredictions = "final",
+  index = createFolds(as.factor(train.data$RISK), 7),
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary,
+  sampling = "down"
+)
+
+# multinom.grid <- expand.grid(decay = 0)
+
+xgbTreeGrid <-
+  expand.grid(
+    nrounds = 1000,
+    max_depth = seq(0, 1, by = 0.1),
+    eta = 0.1,
+    gamma = 0,
+    colsample_bytree = 0.6537,
+    subsample = 1.0,
+    min_child_weight = 4
+  )
+
+
+glmnetGridElastic <-
+expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
+
+
+gbm.tune.grid <-
+  expand.grid(
+    n.trees = c(401),
+    interaction.depth = c(0, 0.1, 0.2),
+    shrinkage = c(.01, .1, .3),
+    n.minobsinnode = c(5, 10, 15)
+  )
+
+
+set.seed(333)
+
+modelListDown <- caretList(
+  RISK ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + PRCP + SEASON.winter + SEASON.spring + SEASON.summer,
+  
+  train.data,
+  
+  trControl = trControl,
+  
+  metric = "ROC",
+  
+  verbose = FALSE,
+  
+  tuneList = list(
+    
+    # Multinomial Logistic regression is using multinom method from nnet package
+    # multinom = caretModelSpec(method = 'multinom',
+    #                           maxit = 150,
+    #                           tuneGrid = multinom.grid),
+    
+    ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+
+    xgbTree = caretModelSpec(
+      method = "xgbTree",
+      tuneGrid = xgbTreeGrid,
+      nthread = 8
+    ),
+
+    glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),
+    # Elastic, highly correlated with lasso and ridge regressions
+
+    rf = caretModelSpec(
+      method = "rf",
+      ntree = 5000,
+      tuneLength = 20
+    ),
+    # rf
+
+    gbm = caretModelSpec(method = "gbm")#, tuneGrid = gbm.tune.grid)
+    
+  )
+)
+
+```
+
+
+```{r Modeling with smote, echo=FALSE, warning=FALSE, message=FALSE}
+
+trControl <- trainControl(
+  method = "cv",
+  number = 7,
+  savePredictions = "final",
+  index = createFolds(as.factor(train.data$RISK), 7),
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary,
+  sampling = "smote"
+)
+
+# multinom.grid <- expand.grid(decay = 0)
+
+xgbTreeGrid <-
+  expand.grid(
+    nrounds = 1000,
+    max_depth = seq(0, 1, by = 0.1),
+    eta = 0.1,
+    gamma = 0,
+    colsample_bytree = 0.6537,
+    subsample = 1.0,
+    min_child_weight = 4
+  )
+
+
+glmnetGridElastic <-
+expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
+
+
+gbm.tune.grid <-
+  expand.grid(
+    n.trees = c(401),
+    interaction.depth = c(0, 0.1, 0.2),
+    shrinkage = c(.01, .1, .3),
+    n.minobsinnode = c(5, 10, 15)
+  )
+
+
+set.seed(333)
+
+modelListSmote <- caretList(
+  RISK ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + PRCP + SEASON.winter + SEASON.spring + SEASON.summer,
+  
+  train.data,
+  
+  trControl = trControl,
+  
+  metric = "ROC",
+  
+  verbose = FALSE,
+  
+  tuneList = list(
+    
+    # Multinomial Logistic regression is using multinom method from nnet package
+    # multinom = caretModelSpec(method = 'multinom',
+    #                           maxit = 150,
+    #                           tuneGrid = multinom.grid),
+    
+    ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+
+    xgbTree = caretModelSpec(
+      method = "xgbTree",
+      tuneGrid = xgbTreeGrid,
+      nthread = 8
+    ),
+
+    glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),
+    # Elastic, highly correlated with lasso and ridge regressions
+
+    rf = caretModelSpec(
+      method = "rf",
+      ntree = 5000,
+      tuneLength = 20
+    ),
+    # rf
+
+    gbm = caretModelSpec(method = "gbm")#, tuneGrid = gbm.tune.grid)
+    
+  )
+)
+
+```
+
+
+```{r XgbTree Model}
+validateAndPrintResult(modelListUp[['xgbTree']],
+                       test.data,
+                       paste0(airportName, " ", modelListUp[['xgbTree']][['method']], " upsample"))
+
+validateAndPrintResult(modelListDown[['xgbTree']],
+                       test.data,
+                       paste0(airportName, " ", modelListDown[['xgbTree']][['method']], " downsample"))
+
+validateAndPrintResult(modelListSmote[['xgbTree']],
+                       test.data,
+                       paste0(airportName, " ", modelListSmote[['xgbTree']][['method']], " smotesample"))
+```
+
+```{r glmnet Model}
+validateAndPrintResult(modelListUp[['glmnet']],
+                       test.data,
+                       paste0(airportName, " ", modelListUp[['glmnet']][['method']], " upsample"))
+
+validateAndPrintResult(modelListDown[['glmnet']],
+                       test.data,
+                       paste0(airportName, " ", modelListDown[['glmnet']][['method']], " downsample"))
+
+validateAndPrintResult(modelListSmote[['glmnet']],
+                       test.data,
+                       paste0(airportName, " ", modelListSmote[['glmnet']][['method']], " smotesample"))
+```
+
+
+```{r Random Forest Model}
+validateAndPrintResult(modelListUp[['rf']],
+                       test.data,
+                       paste0(airportName, " ", modelListUp[['rf']][['method']], " upsample"))
+
+validateAndPrintResult(modelListDown[['rf']],
+                       test.data,
+                       paste0(airportName, " ", modelListDown[['rf']][['method']], " downsample"))
+
+validateAndPrintResult(modelListSmote[['rf']],
+                       test.data,
+                       paste0(airportName, " ", modelListSmote[['rf']][['method']], " smotesample"))
+```
+
+```{r gbm Model}
+validateAndPrintResult(modelListUp[['gbm']],
+                       test.data,
+                       paste0(airportName, " ", modelListUp[['gbm']][['method']], " upsample"))
+
+validateAndPrintResult(modelListDown[['gbm']],
+                       test.data,
+                       paste0(airportName, " ", modelListDown[['gbm']][['method']], " downsample"))
+
+validateAndPrintResult(modelListSmote[['gbm']],
+                       test.data,
+                       paste0(airportName, " ", modelListSmote[['gbm']][['method']], " smotesample"))
+```
+

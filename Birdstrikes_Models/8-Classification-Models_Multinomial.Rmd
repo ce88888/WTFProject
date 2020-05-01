@@ -58,6 +58,8 @@ packages <- c(
   'foreach',
   'broom',
   'DT',
+  'DMwR2',
+  'ROSE',
   'h2o',
   'AppliedPredictiveModeling',
   'xgboost',
@@ -85,13 +87,28 @@ h2o.init()
 
 ```
 
-```{r Model Data by Day}
+```{r}
+airportName <- "KORD"
+```
 
+
+```{r}
 # Read Classification dataset from RDS
-class.data <- readRDS("KDEN_Class_Data_New.RDS")
+class.data <- readRDS("AIRFIELDS_MASTERv2.RDS")
+
+class.data <- class.data %>% rename(AIRFIELD = `AIRPORT ID`)
+
+class.data <- class.data %>% filter(class.data$AIRFIELD == airportName)
+```
+
+
+```{r Model Data by Day}
 
 # Reorder data frame by Date 
 class.data <- class.data[order(class.data$DATE), ]
+
+class.data <-
+  class.data %>% filter(class.data$STRIKECOUNT < 10)
 
 # class.data$PRCP_LAG_1 <- lag(class.data$PRCP, k = 1)
 
@@ -106,48 +123,51 @@ class.data <-
 class.data$FOG <- as.factor(class.data$FOG)
 class.data$SNOW_ICE <- as.factor(class.data$SNOW_ICE)
 
-class.data <- class.data %>%
-  mutate(
-    WEEK = lubridate::week(class.data$DATE),
-    YEAR = lubridate::year(class.data$DATE)
-  ) %>%
-  mutate(RATIO = STRIKECOUNT / FLIGHTCOUNT * 10000)
+# class.data <- class.data %>%
+#   mutate(
+#     WEEK = lubridate::week(class.data$DATE),
+#     YEAR = lubridate::year(class.data$DATE)
+#   ) %>%
+#   mutate(RATIO = STRIKECOUNT / FLIGHTCOUNT * 10000)
+# 
+# t.data <- class.data %>%
+#   mutate(RATIO = STRIKECOUNT / FLIGHTCOUNT * 10000) %>%
+#   group_by(YEAR, WEEK) %>%
+#   summarise(RATIO = mean(RATIO)) %>%
+#   mutate(RISK = .bincode(
+#     RATIO,
+#     breaks = quantile(RATIO, probs = seq(0, 1, 1 / 3)),
+#     include.lowest = TRUE
+#   ) - 1)
+# 
+# t.data <- t.data %>%
+#   group_by(YEAR, WEEK) %>%
+#   summarise(RATIOP = mean(RATIO)) %>%
+#   mutate(RISK = .bincode(
+#     RATIOP,
+#     breaks = c(0, min(RATIOP) + (1:2) * (max(RATIOP) - min(RATIOP)) / 3, max(RATIOP)),
+#     include.lowest = TRUE
+#   ) - 1)
+# 
+# class.data <-
+#   left_join(class.data, t.data, by = c("YEAR" = "YEAR", "WEEK" = "WEEK"))
+# 
+# class.data$RISK <-
+#   as.factor(ifelse(class.data$RISK == 0, "L", ifelse(class.data$RISK == 1, "M", "H")))
 
-t.data <- class.data %>%
-  mutate(RATIO = STRIKECOUNT / FLIGHTCOUNT * 10000) %>%
-  group_by(YEAR, WEEK) %>%
-  summarise(RATIO = mean(RATIO)) %>%
-  mutate(RISK = .bincode(
-    RATIO,
-    breaks = quantile(RATIO, probs = seq(0, 1, 1 / 3)),
-    include.lowest = TRUE
-  ) - 1)
+class.data <- class.data %>% filter(!(class.data$BIRDCOUNT == 0 & class.data$STRIKECOUNT == 0))
 
-t.data <- t.data %>%
-  group_by(YEAR, WEEK) %>%
-  summarise(RATIOP = mean(RATIO)) %>%
-  mutate(RISK = .bincode(
-    RATIOP,
-    breaks = c(0, min(RATIOP) + (1:2) * (max(RATIOP) - min(RATIOP)) / 3, max(RATIOP)),
-    include.lowest = TRUE
-  ) - 1)
-
-class.data <-
-  left_join(class.data, t.data, by = c("YEAR" = "YEAR", "WEEK" = "WEEK"))
-
-class.data$RISK <-
-  as.factor(ifelse(class.data$RISK == 0, "L", ifelse(class.data$RISK == 1, "M", "H")))
-
+# rm(t.data)
 ```
 
 
 ```{r Test Train Splits}
 
 # one-hot-encoding categorical features
-ohe_feats = c('MONTH')
+ohe_feats = c('SEASON')
 
 # Create dummies
-dummies <- dummyVars(~ MONTH, data = class.data)
+dummies <- dummyVars(~ SEASON, data = class.data)
 
 df.dummies <- as.data.frame(predict(dummies, newdata = class.data))
 
@@ -156,45 +176,45 @@ class.data <-
   cbind(class.data[, -c(which(colnames(class.data) %in% ohe_feats))], df.dummies)
 
 
-valid.cl.data <-
-  class.data[(class.data$YEAR %in% c(2018:2019)), ]
+# valid.cl.data <-
+#   class.data[(class.data$YEAR %in% c(2018:2019)), ]
 
 class.data <-
-  class.data %>% filter(!class.data$YEAR %in% c(1995:2007, 2018:2019))
+  class.data %>% filter(!class.data$YEAR %in% c(1995:1999))
 
-class.data <- subset(class.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP))
+class.data <- subset(class.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP, MONTH, THUNDER, HAIL, AIRFIELD, DAYOFWEEK))
 
-valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP))
+# valid.cl.data <- subset(valid.cl.data, select = -c(DATE, YEAR, SNOW_ICE, STRIKECOUNT, STRIKE, WEEK, RATIO, RATIOP, WDSP, DEWP))
 # MXSPD
 ```
 
 ```{r Baruta, r fig1, fig.height = 2, fig.width = 4, fig.align = "center"}
 
 # Execute Boruta
-var.boruta <-
-  Boruta(
-    as.factor(RISK) ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + MXSPD + VISIB + PRCP + FOG,
-    data = class.data,
-    doTrace = 2
-  )
-
-# Plot importance based on the Z Scores
-lz <- lapply(1:ncol(var.boruta$ImpHistory), function(i)
-  var.boruta$ImpHistory[is.finite(var.boruta$ImpHistory[, i]), i])
-names(lz) <- colnames(var.boruta$ImpHistory)
-Labels <- sort(sapply(lz, median))
-plot(
-  var.boruta,
-  side = 1,
-  las = 2,
-  labels = names(Labels),
-  at = 1:ncol(var.boruta$ImpHistory),
-  cex.axis = 0.7
-)
-final.boruta <- TentativeRoughFix(var.boruta)
-getSelectedAttributes(final.boruta, withTentative = F)
-boruta.df <- attStats(final.boruta)
-print(boruta.df)
+# var.boruta <-
+#   Boruta(
+#     as.factor(RISK) ~ BIRDCOUNT + TEMP + MXSPD + SLP + VISIB + PRCP + FOG + SEASON.winter + SEASON.fall + SEASON.spring + SEASON.summer + RAIN_DRIZZLE,
+#     data = class.data,
+#     doTrace = 2
+#   )
+# 
+# # Plot importance based on the Z Scores
+# lz <- lapply(1:ncol(var.boruta$ImpHistory), function(i)
+#   var.boruta$ImpHistory[is.finite(var.boruta$ImpHistory[, i]), i])
+# names(lz) <- colnames(var.boruta$ImpHistory)
+# Labels <- sort(sapply(lz, median))
+# plot(
+#   var.boruta,
+#   side = 1,
+#   las = 2,
+#   labels = names(Labels),
+#   at = 1:ncol(var.boruta$ImpHistory),
+#   cex.axis = 0.7
+# )
+# final.boruta <- TentativeRoughFix(var.boruta)
+# getSelectedAttributes(final.boruta, withTentative = F)
+# boruta.df <- attStats(final.boruta)
+# print(boruta.df)
 
 ```
 
@@ -263,20 +283,21 @@ trControl <- trainControl(
   method = "cv",
   number = 7,
   savePredictions = "final",
-  # index = createResample(as.factor(train.data$RISK), 7),
+  index = createFolds(as.factor(train.data$RISK), 7),
   classProbs = TRUE,
-  summaryFunction = multiClassSummary
+  summaryFunction = multiClassSummary,
+  sampling = "smote"
 )
 
 multinom.grid <- expand.grid(decay = 0)
 
 xgbTreeGrid <-
   expand.grid(
-    nrounds = 500,
-    max_depth = seq(2, 8, by = 1),
+    nrounds = 1000,
+    max_depth = seq(0, 1, by = 0.1),
     eta = 0.1,
     gamma = 0,
-    colsample_bytree = 1.0,
+    colsample_bytree = 0.6537,
     subsample = 1.0,
     min_child_weight = 4
   )
@@ -285,55 +306,54 @@ glmnetGridElastic <-
   expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
 
 
-# gbm.tune.grid <-
-#   expand.grid(
-#     n.trees = c(400),
-#     interaction.depth = c(1, 3, 5),
-#     shrinkage = c(.01, .1, .3),
-#     n.minobsinnode = c(5, 10, 15)
-#   )
-
+gbm.tune.grid <-
+  expand.grid(
+    n.trees = c(401),
+    interaction.depth = c(0, 0.1, 0.2),
+    shrinkage = c(.01, .1, .3),
+    n.minobsinnode = c(5, 10, 15)
+  )
 
 set.seed(333)
 
 modelList <- caretList(
-  RISK ~ .,
+  RISK ~ BIRDCOUNT + TEMP + PRCP + SEASON.winter + SEASON.spring + SEASON.summer,
   
   train.data,
   
   trControl = trControl,
   
-  metric = "logLoss",
+  metric = "ROC",
   
   verbose = TRUE,
   
   tuneList = list(
-    
     # Multinomial Logistic regression is using multinom method from nnet package
-    multinom = caretModelSpec(method = 'multinom',
-                              maxit = 150,
-                              tuneGrid = multinom.grid), 
+    multinom = caretModelSpec(
+      method = 'multinom',
+      maxit = 150,
+      tuneGrid = multinom.grid
+    ),
     
     ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
-
+    
     xgbTree = caretModelSpec(
       method = "xgbTree",
       tuneGrid = xgbTreeGrid,
       nthread = 8
     ),
-
+    
     glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),
     # Elastic, highly correlated with lasso and ridge regressions
-
+    
     rf = caretModelSpec(
       method = "rf",
-      ntree = 2000,
-      tuneLength = 20,
-      tuneGrid = data.frame(mtry = 10)
+      ntree = 5000,
+      tuneLength = 20
     ),
     # rf
-
-    gbm = caretModelSpec(method = "gbm") #, tuneGrid = gbm.tune.grid
+    
+    gbm = caretModelSpec(method = "gbm")#, tuneGrid = gbm.tune.grid)
     
   )
 )
@@ -343,44 +363,50 @@ modelList <- caretList(
 
 ```{r}
 
-# validateAndPrintResult(modelList$multinom, test.data)
+validateAndPrintResult(modelList$multinom, test.data)
 
-validateAndPrintResult(modelList$multinom, valid.cl.data)
-
-
-```
-
-```{r}
-
-# validateAndPrintResult(modelList$xgbTree, test.data)
-
-validateAndPrintResult(modelList$xgbTree, valid.cl.data)
+# validateAndPrintResult(modelList$multinom, valid.cl.data)
 
 
 ```
 
 ```{r}
 
-# validateAndPrintResult(modelList$glmnet, test.data)
+validateAndPrintResult(modelList$xgbTree, test.data)
 
-validateAndPrintResult(modelList$glmnet, valid.cl.data)
+# validateAndPrintResult(modelList$xgbTree, valid.cl.data)
+
+
+```
+
+```{r}
+
+validateAndPrintResult(modelList$glmnet, test.data)
+
+# validateAndPrintResult(modelList$glmnet, valid.cl.data)
 
 ```
 
 ```{r}
 
 
-# validateAndPrintResult(modelList$rf, test.data)
+validateAndPrintResult(modelList$rf, test.data)
 
-validateAndPrintResult(modelList$rf, valid.cl.data)
+# validateAndPrintResult(modelList$rf, valid.cl.data)
 ```
 
 ```{r}
-# validateAndPrintResult(modelList$gbm, test.data)
+validateAndPrintResult(modelList$gbm, test.data)
 
-validateAndPrintResult(modelList$gbm, valid.cl.data)
+# validateAndPrintResult(modelList$gbm, valid.cl.data)
 
 ```
+
+```{r}
+saveRDS(modelList$gbm, "model_gbm_KDFW.RDS")
+
+```
+
 
 ```{r}
 
@@ -418,117 +444,117 @@ nfolds <- 5
 ```
 
 ```{r}
-# # 2. Generate a random grid of models and stack them together
-# 
-# # Some XGboost/GBM /rf hyperparameters
-# hyper_params <- list(
-#   ntrees = seq(10, 1000, 1),
-#   learn_rate = seq(0.0001, 0.2, 0.0001),
-#   max_depth = seq(1, 20, 1),
-#   sample_rate = seq(0.5, 1.0, 0.0001),
-#   col_sample_rate = seq(0.2, 1.0, 0.0001)
-# )
-# 
-# search_criteria <- list(strategy = "RandomDiscrete",
-#                         max_models = 10)
-# 
-# grid.id <-  as.character(format(Sys.time(), "%S"))
-# 
-# 
-# # Train & Cross-validate a RF
-# rf_grid <- h2o.grid(
-#   algorithm = "drf",
-#   grid_id = paste0("grid_binomial_rf_", grid.id),
-#   x = x,
-#   y = y,
-#   training_frame = train.data,
-#   seed = 100,
-#   nfolds = nfolds,
-#   ntrees = 2500,
-#   fold_assignment = "Modulo",
-#   keep_cross_validation_predictions = TRUE
-# )
-# 
-# 
-# gbm_grid <- h2o.grid(
-#   algorithm = "gbm",
-#   grid_id = paste0("grid_binomial_gbm_", grid.id),
-#   x = x,
-#   y = y,
-#   training_frame = train.data,
-#   # ntrees = seq(10, 1000, 1),
-#   seed = 100,
-#   nfolds = nfolds,
-#   fold_assignment = "Modulo",
-#   keep_cross_validation_predictions = TRUE,
-#   hyper_params = hyper_params,
-#   search_criteria = search_criteria
-# )
-# 
-# 
-# 
-# # Train the grid
-# xgb_grid <- h2o.grid(
-#   algorithm = "xgboost",
-#   grid_id = paste0("grid_binomial_xgb_", grid.id),
-#   x = x,
-#   y = y,
-#   training_frame = train.data,
-#   nfolds = nfolds,
-#   seed = 100,
-#   fold_assignment = "Modulo",
-#   keep_cross_validation_predictions = TRUE,
-#   hyper_params = hyper_params,
-#   search_criteria = search_criteria
-# )
-# 
-# # Train a stacked ensemble using the H2O and XGBoost models from above
-# base.models <- append(gbm_grid@model_ids,
-#                       xgb_grid@model_ids)
-# 
-# # Train a stacked ensemble using the GBM grid
-# ensemble <- h2o.stackedEnsemble(
-#   x = x,
-#   y = y,
-#   model_id = paste0("ensemble_gbm_grid_", grid.id, "_24"),
-#   training_frame = train.data,
-#   base_models = base.models
-# )
-# 
-# # Eval ensemble performance on a test set
-# perf <- h2o.performance(ensemble, newdata = test.data)
-# 
-# # Compare to base learner performance on the test set
-# .getmean_per_class_error <-
-#   function(mm)
-#     h2o.mean_per_class_error(h2o.performance(h2o.getModel(mm), newdata = test.data))
-# 
-# baselearner_aucs <- sapply(base.models, .getmean_per_class_error)
-# baselearner_best_auc_test <- max(baselearner_aucs)
-# ensemble_auc_test <- h2o.mean_per_class_error(perf)
-# print(sprintf("Best Base-learner Test Mean per class error:  %s", baselearner_best_auc_test))
-# print(sprintf("Ensemble Test Mean per class error:  %s", ensemble_auc_test))
-# 
-# # Generate predictions on a test set (if neccessary)
-# pred <- h2o.predict(ensemble, newdata = test.data)
-# 
-# # Sort the grid by CV AUC for GBM
-# get_gbm_grid <- h2o.getGrid(grid_id = gbm_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
-# get_gbm_grid
-# gbm_grid_top_model <- get_gbm_grid@summary_table[1, "model_ids"]
-# gbm_grid_top_model
-# 
-# # Sort the grid by CV AUC for XGBOOST
-# get_xgb_grid <- h2o.getGrid(grid_id = xgb_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
-# get_xgb_grid
-# xgb_grid_top_model <- get_xgb_grid@summary_table[1, "model_ids"]
-# xgb_grid_top_model
-# 
-# # Sort the grid by CV AUC for XGBOOST
-# get_rf_grid <- h2o.getGrid(grid_id = rf_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
-# get_rf_grid
-# rf_grid_top_model <- get_rf_grid@summary_table[1, "model_ids"]
-# rf_grid_top_model
+# 2. Generate a random grid of models and stack them together
+
+# Some XGboost/GBM /rf hyperparameters
+hyper_params <- list(
+  ntrees = seq(10, 1000, 1),
+  learn_rate = seq(0.0001, 0.2, 0.0001),
+  max_depth = seq(1, 20, 1),
+  sample_rate = seq(0.5, 1.0, 0.0001),
+  col_sample_rate = seq(0.2, 1.0, 0.0001)
+)
+
+search_criteria <- list(strategy = "RandomDiscrete",
+                        max_models = 10)
+
+grid.id <-  as.character(format(Sys.time(), "%S"))
+
+
+# Train & Cross-validate a RF
+rf_grid <- h2o.grid(
+  algorithm = "drf",
+  grid_id = paste0("grid_binomial_rf_", grid.id),
+  x = x,
+  y = y,
+  training_frame = train.data,
+  seed = 100,
+  nfolds = nfolds,
+  ntrees = 2500,
+  fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE
+)
+
+
+gbm_grid <- h2o.grid(
+  algorithm = "gbm",
+  grid_id = paste0("grid_binomial_gbm_", grid.id),
+  x = x,
+  y = y,
+  training_frame = train.data,
+  # ntrees = seq(10, 1000, 1),
+  seed = 100,
+  nfolds = nfolds,
+  fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE,
+  hyper_params = hyper_params,
+  search_criteria = search_criteria
+)
+
+
+
+# Train the grid
+xgb_grid <- h2o.grid(
+  algorithm = "xgboost",
+  grid_id = paste0("grid_binomial_xgb_", grid.id),
+  x = x,
+  y = y,
+  training_frame = train.data,
+  nfolds = nfolds,
+  seed = 100,
+  fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE,
+  hyper_params = hyper_params,
+  search_criteria = search_criteria
+)
+
+# Train a stacked ensemble using the H2O and XGBoost models from above
+base.models <- append(gbm_grid@model_ids,
+                      xgb_grid@model_ids)
+
+# Train a stacked ensemble using the GBM grid
+ensemble <- h2o.stackedEnsemble(
+  x = x,
+  y = y,
+  model_id = paste0("ensemble_gbm_grid_", grid.id, "_24"),
+  training_frame = train.data,
+  base_models = base.models
+)
+
+# Eval ensemble performance on a test set
+perf <- h2o.performance(ensemble, newdata = test.data)
+
+# Compare to base learner performance on the test set
+.getmean_per_class_error <-
+  function(mm)
+    h2o.mean_per_class_error(h2o.performance(h2o.getModel(mm), newdata = test.data))
+
+baselearner_aucs <- sapply(base.models, .getmean_per_class_error)
+baselearner_best_auc_test <- max(baselearner_aucs)
+ensemble_auc_test <- h2o.mean_per_class_error(perf)
+print(sprintf("Best Base-learner Test Mean per class error:  %s", baselearner_best_auc_test))
+print(sprintf("Ensemble Test Mean per class error:  %s", ensemble_auc_test))
+
+# Generate predictions on a test set (if neccessary)
+pred <- h2o.predict(ensemble, newdata = test.data)
+
+# Sort the grid by CV AUC for GBM
+get_gbm_grid <- h2o.getGrid(grid_id = gbm_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
+get_gbm_grid
+gbm_grid_top_model <- get_gbm_grid@summary_table[1, "model_ids"]
+gbm_grid_top_model
+
+# Sort the grid by CV AUC for XGBOOST
+get_xgb_grid <- h2o.getGrid(grid_id = xgb_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
+get_xgb_grid
+xgb_grid_top_model <- get_xgb_grid@summary_table[1, "model_ids"]
+xgb_grid_top_model
+
+# Sort the grid by CV AUC for XGBOOST
+get_rf_grid <- h2o.getGrid(grid_id = rf_grid@grid_id, sort_by = "mean_per_class_error", decreasing = TRUE)
+get_rf_grid
+rf_grid_top_model <- get_rf_grid@summary_table[1, "model_ids"]
+rf_grid_top_model
 ```
 
 ```{r}
@@ -555,4 +581,418 @@ auto_ml@leaderboard %>%
   dplyr::select(model_id, mean_per_class_error) %>%
   dplyr::slice(1:25)
 ```
+
+
+
+```{r}
+
+# Read Classification dataset from RDS
+data <- readRDS("AIRFIELDS_MASTERv2.RDS")
+
+data <- data %>% rename(AIRFIELD = `AIRPORT ID`)
+
+data <- data %>% filter(data$AIRFIELD == "KDEN")
+
+data <- data %>%
+  mutate(DAYOFYEAR = lubridate::yday(data$DATE))
+
+levels(data$SEASON) <- 1:4
+
+data$SEASON <- as.numeric(data$SEASON)
+
+avgs <- data %>% 
+  group_by(DAYOFYEAR) %>%
+  summarise(BIRDCOUNT = round(mean(BIRDCOUNT),0),
+            FLIGHTCOUNT = round(mean(FLIGHTCOUNT),0),
+            PRCP = round(mean(PRCP),2),
+            SLP = round(mean(SLP),2),
+            VISIB = round(mean(VISIB),2),
+            MXSPD = round(mean(MXSPD),2),
+            TEMP = round(mean(TEMP),1),
+            SEASON = round(mean(SEASON),0))
+
+avgs[avgs$DAYOFYEAR == 335, "SEASON"] <- 4
+
+saveRDS(avgs, "Avgs_KDEN.RDS")
+
+# SEASON = as.factor(factor(
+#       format(as.yearqtr(
+#         as.yearmon($DATE, "%m/%d/%Y") + 1 / 12
+#       ), "%q"),
+#       levels = 1:4,
+#       labels = c("winter", "spring", "summer", "fall")
+#     ))
+
+strikedate = "2020-06-05"
+
+data <- readRDS("Avgs_KSMF.RDS")
+
+strikeDayOfYear <- lubridate::yday(as.Date(strikedate))
+
+data <- data %>% filter(DAYOFYEAR == strikeDayOfYear)
+
+data <-
+  data %>% add_column(
+    SEASON.winter = 0,
+    SEASON.summer = 0,
+    SEASON.fall = 0,
+    SEASON.spring = 0
+  )
+
+if(data$SEASON == 1) {
+  data$SEASON.winter <- 1
+} else if (data$SEASON == 2) {
+  data$SEASON.spring <- 1
+} else if (data$SEASON == 3) {
+  data$SEASON.summer <- 1
+} else {
+  data$SEASON.fall <- 1
+}
+
+data <-
+  data %>% select(-SEASON) %>% mutate_all(as.numeric)
+
+```
+
+```{r}
+model <- readRDS("model_xgb_KORD.RDS")
+
+predicted.resp <- predict(model, data, type = 'prob')
+
+predicted.resp
+```
+
+
+```{r}
+getDataAndRunPredict <- function(airfield, strikedate) {
+    
+    # Get Averages file name from the custom dataframe
+    fileNames <-
+      air %>% select(avgfilename, modelfilename) %>% filter(airfields == airfield)
+
+    
+    # Read the Averages from file system
+    data <- readRDS(paste0(fileNames$avgfilename))
+
+    # Convert the input to date format and convert to Day of Week
+    #data <-
+      data %>% filter(DAYOFYEAR == lubridate::yday(as.Date(strikedate)))
+
+    # Create Season columns as required by the input to the model
+    data <-
+      data %>% add_column(
+        SEASON.winter = 0,
+        SEASON.summer = 0,
+        SEASON.fall = 0,
+        SEASON.spring = 0
+      )
+
+    # Fill the season columns based on the value in the Averages dataframe
+    if (data$SEASON == 1) {
+      data$SEASON.winter <- 1
+    } else if (data$SEASON == 2) {
+      data$SEASON.spring <- 1
+    } else if (data$SEASON == 3) {
+      data$SEASON.summer <- 1
+    } else {
+      data$SEASON.fall <- 1
+    }
+
+    # Remove Season column and make all columns numeric
+    data <-
+      data %>% select(-SEASON) %>% mutate_all(as.numeric)
+
+    
+    # Load model from RDS
+    model <- readRDS((paste0(fileNames$modelfilename)))
+    
+    # Call predict with type = raw to get the risk levels
+    predicted.raw <- predict(model, data, type = "raw")
+    
+    # Call Predict with type = prob to get probabilities
+    predicted.prob <- predict(model, data, type = "prob")
+    
+    predicted.prob
+    # Create results dataframe for use in UI
+    strike.results <-
+      data.frame("STRIKERISKLEVEL" = predicted.raw,
+                 "STRIKEPROBABILITY" = predicted.prob)
+    
+    # Return dataframe
+    strike.results
+  }
+#Run the function
+risk<-getDataAndRunPredict("KDEN",Sys.Date())
+#Add the date 
+risk$date <- seq(ymd("2020/1/1"), ymd("2020/12/31"), by = "day")
+#Add the month 
+risk$month <- lubridate::month(risk$date,label= TRUE, abbr = FALSE)
+#counts the number of lines assigned by the month and risk level 
+risk %>%  group_by(month,STRIKERISKLEVEL) %>% 
+  tally()
+
+```
+
+```{r Multinom Model}
+
+# sampling <- c('up', 'down', 'smote')
+# 
+# models <- c('multinom', 'xgbTree', 'glmnet', 'rf', 'gbm')
+
+# models <-
+#   c(
+#     modelListUp$multinom,
+#     modelListUp$xgbTree,
+#     modelListUp$glmnet,
+#     modelListUp$rf,
+#     modelListUp$gbm,
+#     modelListDown$multinom,
+#     modelListDown$xgbTree,
+#     modelListDown$glmnet,
+#     modelListDown$rf,
+#     modelListDown$gbm,
+#     modelListSmote$multinom,
+#     modelListSmote$xgbTree,
+#     modelListSmote$glmnet,
+#     modelListSmote$rf,
+#     modelListSmote$gbm
+#   )
+
+# validateAndPrintResult(modelListUp[['multinom']],
+#                        test.data,
+#                        paste0(airportName, " ", modelListUp[['multinom']][['method']], " upsample"))
+# 
+# validateAndPrintResult(modelListDown[['multinom']],
+#                        test.data,
+#                        paste0(airportName, " ", modelListDown[['multinom']][['method']], " downsample"))
+# 
+# validateAndPrintResult(modelListSmote[['multinom']],
+#                        test.data,
+#                        paste0(airportName, " ", modelListSmote[['multinom']][['method']], " smotesample"))
+
+
+# validateAndPrintResult(modelList$xgbTree, test.data)
+# 
+# validateAndPrintResult(modelList$glmnet, test.data)
+# 
+# validateAndPrintResult(modelList$rf, test.data)
+# 
+# validateAndPrintResult(modelList$gbm, test.data)
+
+
+
+```
+
+```{r Modeling with weights, echo=FALSE, warning=FALSE, message=FALSE}
+
+# model_weights <- ifelse(train.data$RISK == "H",
+#                         (1 / table(train.data$RISK)[1]) * 0.5,
+#                         (1 / table(train.data$RISK)[3]) * 0.5)
+# 
+# trControl <- trainControl(
+#   method = "cv",
+#   number = 7,
+#   savePredictions = "final",
+#   index = createFolds(as.factor(train.data$RISK), 7),
+#   classProbs = TRUE,
+#   summaryFunction = multiClassSummary
+# )
+# 
+# multinom.grid <- expand.grid(decay = 0)
+# 
+# xgbTreeGrid <-
+#   expand.grid(
+#     nrounds = 1000,
+#     max_depth = seq(0, 1, by = 0.1),
+#     eta = 0.1,
+#     gamma = 0,
+#     colsample_bytree = 0.6537,
+#     subsample = 1.0,
+#     min_child_weight = 4
+#   )
+# 
+# 
+# glmnetGridElastic <-
+# expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
+# 
+# 
+# gbm.tune.grid <-
+#   expand.grid(
+#     n.trees = c(401),
+#     interaction.depth = c(0, 0.1, 0.2),
+#     shrinkage = c(.01, .1, .3),
+#     n.minobsinnode = c(5, 10, 15)
+#   )
+# 
+# 
+# set.seed(333)
+# 
+# modelListUp <- caretList(
+#   RISK ~ BIRDCOUNT + FLIGHTCOUNT + TEMP + PRCP + SEASON.winter + SEASON.spring + SEASON.summer,
+#   
+#   train.data,
+#   
+#   trControl = trControl,
+#   
+#   metric = "ROC",
+#   
+#   verbose = FALSE,
+#   
+#   weights = model_weights,
+#   
+#   tuneList = list(
+#     
+#     # Multinomial Logistic regression is using multinom method from nnet package
+#     multinom = caretModelSpec(method = 'multinom',
+#                               maxit = 150,
+#                               tuneGrid = multinom.grid),
+#     
+#     ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+# 
+#     xgbTree = caretModelSpec(
+#       method = "xgbTree",
+#       tuneGrid = xgbTreeGrid,
+#       nthread = 8
+#     ),
+# 
+#     glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridElastic),
+#     # Elastic, highly correlated with lasso and ridge regressions
+# 
+#     rf = caretModelSpec(
+#       method = "rf",
+#       ntree = 5000,
+#       tuneLength = 20
+#     ),
+#     # rf
+# 
+#     gbm = caretModelSpec(method = "gbm")#, tuneGrid = gbm.tune.grid)
+#     
+#   )
+# )
+
+```
+
+
+
+```{r, dpi=300}
+
+  # predicted.resp <- predict(modelList$gbm, test.data)
+  # head(predicted.resp)
+  # 
+  # predictions <- as.numeric(predict(modelList$gbm, test.data, type = 'raw'))
+  # multiclass.roc(test.data$RISK, predictions)
+  # 
+  # caret::confusionMatrix(
+  #   reference = as.factor(test.data$RISK),
+  #   data = predicted.resp,
+  #   mode = 'everything',
+  #   positive = 'YES'
+  # )
+  # 
+  # cm <-   caret::confusionMatrix(
+  #   reference = as.factor(test.data$RISK),
+  #   data = predicted.resp,
+  #   mode = 'everything',
+  #   positive = 'YES'
+  # )
+  # 
+  # # Record Class - Sensitivity, specificity etc
+  # cm_class <- as.data.frame(cm$byClass)
+  # 
+  # cm_class <- cm_class %>% dplyr::select(Sensitivity, Specificity, Precision, Recall, F1)
+  # 
+  # cm_class <- round(cm_class, 2)
+  # 
+  # cm_class <- as.data.frame(t(cm_class))
+  # 
+  # cm_class <-
+  #   cm_class %>% dplyr::select(`Class: H`, `Class: M`, `Class: L`)
+  # 
+  # # extract the confusion matrix values as data.frame
+  # cm_d <- as.data.frame(cm$table)
+  # 
+  # cm_d <- cm_d %>% rename("Actuals" = Reference)
+  # # confusion matrix statistics as data.frame
+  # cm_st <- data.frame(cm$overall)
+  # 
+  # cm_st <- cm_st %>% rename("Overall Stats" = cm.overall)
+  #                     
+  # # round the values
+  # cm_st$`Overall Stats` <- round(cm_st$`Overall Stats`, 2)
+  # 
+  # # here we also have the rounded percentage values
+  # cm_p <- as.data.frame(prop.table(cm$table))
+  # cm_d$Perc <- round(cm_p$Freq * 100, 2)
+  # 
+  # # plotting the matrix
+  # cm_d_p <-
+  #   ggplot(data = cm_d, aes(y = Prediction , x =  Actuals, fill = Freq)) +
+  #   geom_tile() +
+  #   geom_text(aes(label = paste("", Freq)), color = 'white', size = 4) +
+  #   theme_light() +
+  #   guides(fill = FALSE)
+  # 
+  #   cm_d_perc <-
+  #   ggplot(data = cm_d, aes(y = Prediction , x =  Actuals, fill = Freq)) +
+  #   geom_tile() +
+  #   geom_text(aes(label = paste("", Perc, "%")), color = 'white', size = 4) +
+  #   theme_light() +
+  #   guides(fill = FALSE)
+  # 
+  # # plotting the stats
+  # cm_st_p <-  tableGrob(head(cm_st$`Overall Stats`,2))
+  # 
+  # cm_st_p1 <- tableGrob(cm_class)
+  # 
+  # # all together
+  # grid.arrange(
+  #   cm_d_p,
+  #   cm_st_p,
+  #   cm_d_perc,
+  #   cm_st_p1,
+  #   nrow = 2,
+  #   ncol = 2,
+  #   top = textGrob("Confusion Matrix and Statistics", gp = gpar(fontsize = 14, font = 2)),
+  #   heights = c(4,4),
+  #   widths = c(4,4)
+  # )
+  # 
+  # cm_st$ModelName <- modelName
+
+
+```
+
+```{r}
+
+# dknn <- readRDS("dknn.RDS")
+# 
+# dknn <-
+#   dknn %>% dplyr::select(-c(YEAR, STRIKE, STRIKECOUNT)) 
+# 
+# dknn <- dknn[complete.cases(dknn), ]
+# 
+# trainyn <- caret::createDataPartition(dknn$RATIO, p = 0.70, list = FALSE)
+# 
+# set.seed(1232)
+# 
+# dtrain <- dknn[trainyn, ]
+# dtest <- dknn[-trainyn, ]
+# 
+# fitControl <- caret::trainControl(
+#   method = "repeatedcv",
+#   number = 3,
+#   repeats = 3,
+#   verboseIter = TRUE,
+#   returnResamp = "all")
+# 
+# rrfFit <- caret::train(as.numeric(RATIO) ~ .,
+#                  data = dtrain,
+#                  method = 'ranger',
+#                  tuneLength = 5, 
+#                  trControl = fitControl,
+#                  num.trees = 100,
+#                  importance = "permutation")
+
+```
+
 
